@@ -1,15 +1,15 @@
 {
-    "version": "0.0.54",
-    "notes": "<b>功能</b><br>• 获取最新代码新增冲突检测：TFS 按 `tf get` 输出中的 `冲突`/`Conflict` 判断（命令返回成功也判断，因为 `tf get` 会自动合并并可能留下冲突项），Git 在 `pull --ff-only` 失败时用 `git diff --diff-filter=U` 列出未合并文件；检测到冲突立即停止并中止后续发布，冲突项写入发布日志（最多 50 项），请在 Visual Studio 中解决后重新发布<br><b>修复</b><br>• 获取最新代码不再因本地有未提交修改而弹确认框：移除「检测到本地存在未提交修改，继续获取最新代码可能触发自动合并。是否继续？」弹窗及对应提示日志，本地有改动时照常执行 `tf get` / `git pull --ff-only`；同时去掉拉取前的一次全量工作区状态扫描，TFS 大工程拉取更快，定时发布也不再因未提交修改跳过拉取<br><b>注：版本 ≤ 0.0.28 <a style='color:green' target='_blank' href='https://github.com/nickynull/publish-tools/releases/download/v0.0.54/SmomPublish_0.0.54_x64-setup.exe'>点击此处</a> 下载。</b>",
-    "pub_date": "2026-10-23T08:33:54Z",
+    "version": "1.2.1",
+    "notes": "<b>功能</b><br>• 「项目发布(STEP)」发布日志细化为三态：每个服务实例发布时先向 `<程序集暂存路径>/发布日志.log` 写一行「**发布开始** 模块（服务标识）→ 发布路径」，成功写「**发布成功** …」（原先只写一行「发布 …」，现改为明确的成功态），失败写「**发布失败** …：<原因>」并区分四种原因——关闭服务失败、替换程序集失败、启动服务失败、未找到对应操作系统的部署环境；配合原有的上传/备份日志，服务器上能直接看出每个实例发布了哪一版、卡在哪一步，不用再回头翻界面日志<br>• 新增「发布顺序」设置：设置页可按上移/下移调整 5 个模块的处理次序，**默认顺序改为 WebApiHost → WebClient → ScheduleServer → WpfClient → SpcMonitor**（原为 WebApiHost → ScheduleServer → WebClient → SpcMonitor → WpfClient，WebClient 前置到第二位）；备份、上传程序集、发布、服务状态查询以及 STEP 页「发布信息」卡的应用类型列表全部跟随该顺序（设置保存后返回 STEP 页即时重排，无需刷新页面）；顺序配置为空/缺项/重复时自动回退默认顺序，不会因配置异常卡住发布<br>• 新增「Windows 服务启停等待超时」设置：**启动等待**与**停止等待**分别配置（5~300 秒，默认各 20 秒），替代原先写死的 150 次 × 2 秒轮询（最长等 5 分钟且启停共用一套值）；超时日志会带出实际等待秒数，便于判断该放宽超时还是服务本身有问题。历史库启动时自动补列，已保存过旧配置的不受影响<br>• 设置页交互改造：新增「**取消保存**」按钮，与「保存」一起移到底部常驻按钮栏（靠右排列）；配置无改动时保存按钮置灰、有改动时亮起并在左侧显示「当前配置未保存」橙色提示，避免改完忘记保存；配置区高度固定填满页面、纵向溢出在内部滚动，配置项再多也不会把底部按钮挤出视野<br><b>修复</b><br>• 修复服务启动异常时「发布」长时间无响应、后续实例全部排队等待的问题：`sc start` 本身不报错，原逻辑在服务真的起不来时要傻等满 5 分钟才超时返回，期间该服务器上后续服务实例全部无法继续发布。现启动确认默认 20 秒即判定失败并中止本次发布（失败原因同步写入服务器发布日志），异常暴露更快、代价可控<br>• 修复设置页配置较长时底部保存按钮被内容顶出屏幕、需要滚动到底才能保存的问题（改为「上部配置区滚动 + 下部按钮栏常驻」的整页布局，根容器沿用框架 `layout-padding`，高度随窗口自适应）<br><b>注：版本 ≤ 0.0.28 <a style='color:green' target='_blank' href='https://github.com/nickynull/publish-tools/releases/download/v1.2.1/SmomPublish_1.2.1_x64-setup.exe'>点击此处</a> 下载。</b>",
+    "pub_date": "2026-10-26T14:00:45Z",
     "platforms": {
         "windows-x86_64": {
-            "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUdGxOWW05d01OSVYzTFRMV2phSU1TUmc5cFR1RGF3ZHZOWmU5ZlFWYUpIaGl1a2tobURSK1ZNbUJycjNDNlhsYzJYanlFUS8ySENWRUVObUViQlRVbzlpUU1SekZneGdVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNzQ0NDAyCWZpbGU6U21vbVB1Ymxpc2hfMC4wLjU0X3g2NC1zZXR1cC5leGUKcCttMzBaenZoUVdQS3IzUmFBNzN6cXNBUVhhR0ZBdzF2dHErakl4akZaeEpTV0VFc0I1MEE1ZzMxSWJReDN1VjdVWFpLQVVHb0h3b1dNWEZVNS9SQmc9PQo=",
-            "url": "https://github.com/nickynull/publish-tools/releases/download/v0.0.54/SmomPublish_0.0.54_x64-setup.exe"
+            "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRRDNCN252RmdQenhKdGtZSEtqSXZTVTZGVXNMRCtFbTY3N0VhVVV5bkxaWHJlYUd6MTUxZVh4MUVBdlVZTnFWei9JZ09SaGJOM0JVTEdPT0FZVXJQV3dhUlMxaXpMblFvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMDIzMjI0CWZpbGU6U21vbVB1Ymxpc2hfMS4yLjFfeDY0LXNldHVwLmV4ZQpFbG9USWRSb2cwTlgyYi9QOCtSbXdJV0p5VlEvN3c3eTgrS3RRUFNOYUJEUmZ2ZGJxSkdsS3NaQkNJbzNTTGNTU0lJNDFpMzlYNE1mS0F6L20vMGxEQT09Cg==",
+            "url": "https://github.com/nickynull/publish-tools/releases/download/v1.2.1/SmomPublish_1.2.1_x64-setup.exe"
         },
         "windows-msi": {
-            "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUdGxOWW05d01OSWZpNE1OcEcrRGk3WFJ5WU5rOSt0Y1FGRnJ3QkV1dS8vd25rK3E4SDVNRVhVdzJsYWFqeVp0RnNhUHN4V0lXb1hyNWxwS3Y4eGgvQ2hlcEp3QTNqbndZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNzQ0NDAyCWZpbGU6U21vbVB1Ymxpc2hfMC4wLjU0X3g2NF96aC1DTi5tc2kKSVdTZ0NYQzZuT1BSZHc2S3pueTExTHN3T3k4TDZ4ZEhMUS9uUjRybEpDRXJUNXVEVUdiSHpBT3R1Qkp5ZFp3ZGRUMU1MVHRtTy9hNEpiQ0V6aWcvRGc9PQo=",
-            "url": "https://github.com/nickynull/publish-tools/releases/download/v0.0.54/SmomPublish_0.0.54_x64_zh-CN.msi"
+            "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRRDNCN252RmdQejFTaFVtMmNnemxoNWxKck5ETkhTcGI5M2luQ0VCQkVFalJrZXBLT21zd29vdmJYbnhGWTFWL29RSTExVTFza2NsV29iZUtWQnFnY3B5SkVTYzBrV0FNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMDIzMjI0CWZpbGU6U21vbVB1Ymxpc2hfMS4yLjFfeDY0X3poLUNOLm1zaQphSHBoZDNmNlM1YzkwWW91ZU1reFpFODU1V3BnZGN6RFBBSGR5eldyalpaTWxWR2R3aG5XcTliRkpxeFJFZmZzbm5PVTJScUI0OVhvL1ZlNWlvYnlCdz09Cg==",
+            "url": "https://github.com/nickynull/publish-tools/releases/download/v1.2.1/SmomPublish_1.2.1_x64_zh-CN.msi"
         }
     }
 }

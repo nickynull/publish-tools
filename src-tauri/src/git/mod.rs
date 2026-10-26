@@ -41,9 +41,7 @@ pub async fn execute_git_command_internal(
     let mut err_msg = String::new();
 
     while attempts < MAX_RETRIES {
-        if let Err(e) = check_cancelled() {
-            return Err(e);
-        }
+        check_cancelled()?;
         match exec_git_command(command, args.clone(), cwd) {
             // 移除 .await
             Ok(result) => return Ok(result),
@@ -68,10 +66,8 @@ pub async fn execute_git_command_internal(
                         }),
                     );
                 }
-                if attempts < MAX_RETRIES {
-                    if !sleep_with_cancel(RETRY_DELAY) {
-                        return Err(CANCELLED_MSG.to_string());
-                    }
+                if attempts < MAX_RETRIES && !sleep_with_cancel(RETRY_DELAY) {
+                    return Err(CANCELLED_MSG.to_string());
                 }
                 err_msg = e;
             }

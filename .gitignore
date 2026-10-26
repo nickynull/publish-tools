@@ -47,3 +47,6 @@ src-tauri/tauri.key.pub.bak-oldkey
 Exp-Tools/*
 # ZCode 本地工具目录
 .zcode/
+
+# WorkBuddy 本地工作目录
+.workbuddy/

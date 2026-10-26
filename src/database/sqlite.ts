@@ -107,6 +107,9 @@ async function ensureSchema(database: Database) {
         win_copy_retry_interval INTEGER DEFAULT 2,
         upload_retry_count INTEGER DEFAULT 99,
         upload_retry_interval INTEGER DEFAULT 3,
+        win_service_start_timeout INTEGER DEFAULT 20,
+        win_service_stop_timeout INTEGER DEFAULT 20,
+        publish_module_order TEXT DEFAULT 'WebApiHost,WebClient,ScheduleServer,WpfClient,SpcMonitor',
         update_time TEXT
     )`);
 
@@ -162,6 +165,17 @@ async function ensureSchema(database: Database) {
     }
     if (!syncSettingsColumns.some((column) => column.name === "upload_retry_interval")) {
         await database.execute("ALTER TABLE t_settings ADD COLUMN upload_retry_interval INTEGER DEFAULT 3");
+    }
+
+    // t_settings 加服务启停等待超时（sc 命令后轮询确认状态的最长等待秒数）与发布模块顺序（逗号分隔）
+    if (!syncSettingsColumns.some((column) => column.name === "win_service_start_timeout")) {
+        await database.execute("ALTER TABLE t_settings ADD COLUMN win_service_start_timeout INTEGER DEFAULT 20");
+    }
+    if (!syncSettingsColumns.some((column) => column.name === "win_service_stop_timeout")) {
+        await database.execute("ALTER TABLE t_settings ADD COLUMN win_service_stop_timeout INTEGER DEFAULT 20");
+    }
+    if (!syncSettingsColumns.some((column) => column.name === "publish_module_order")) {
+        await database.execute("ALTER TABLE t_settings ADD COLUMN publish_module_order TEXT DEFAULT 'WebApiHost,WebClient,ScheduleServer,WpfClient,SpcMonitor'");
     }
 
     // ========== 改列（服务重试列名由 stop_retry 统一为 retry，老库存在旧列则逐列重命名） ==========

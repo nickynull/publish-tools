@@ -7,7 +7,7 @@ import { isCommitSelectModel } from "@/utils/sourceControl";
 import { useServerDb } from "@/database/servers/index";
 import { useTfsDb } from "@/database/teamFoundationServer/index";
 import { useGitDb } from "@/database/git/index";
-import { getRetryArgs } from "@/utils/publishSettings";
+import { getRetryArgs, getPublishModuleOrder, getServiceWaitTimeouts } from "@/utils/publishSettings";
 import type { StepLogApi } from "./useStepLog";
 import {
 	outPublishContents,
@@ -512,7 +512,13 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			}
 			modules.push({ name: MODULE_NAMES.wpfClient, clientPath: wpfItem.clientPath, serverArr: wpfItem.serverArr || [], hasService: false });
 		}
-		return modules;
+		// 按设置页配置的发布模块顺序排序（顺序外的模块名排在末尾，保持原相对顺序）
+		const order = getPublishModuleOrder();
+		const rank = (name: string) => {
+			const idx = order.indexOf(name);
+			return idx === -1 ? order.length : idx;
+		};
+		return modules.sort((a, b) => rank(a.name) - rank(b.name));
 	};
 
 	// 收集服务实例
@@ -583,9 +589,11 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			return false;
 		}
 
-		// sc 命令为非阻塞，需轮询确认状态；最多等待 5 分钟；请求停止时立即中止轮询
-		const maxRetries = 150;
+		// sc 命令为非阻塞，需轮询确认状态；等待超时在设置页配置（启动默认 20 秒 / 停止默认 60 秒）；请求停止时立即中止轮询
 		const retryInterval = 2000;
+		const { startTimeoutSecs, stopTimeoutSecs } = getServiceWaitTimeouts();
+		const timeoutSecs = action === "stop" ? stopTimeoutSecs : startTimeoutSecs;
+		const maxRetries = Math.max(1, Math.ceil((timeoutSecs * 1000) / retryInterval));
 		for (let i = 0; i < maxRetries; i++) {
 			await new Promise((resolve) => setTimeout(resolve, retryInterval));
 			if (checkStop()) return false;
@@ -594,7 +602,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			if (action === "start" && !stopped) return true;
 		}
 
-		printInfoLog(`服务 ${serviceName} ${action === "stop" ? "关闭" : "启动"}超时，请手动检查.`, "log-warning");
+		printInfoLog(`服务 ${serviceName} ${action === "stop" ? "关闭" : "启动"}超时（已等待 ${timeoutSecs} 秒），请手动检查.`, "log-warning");
 		return false;
 	};
 
@@ -2484,6 +2492,27 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 					const serverAddress = `${serverInfo.ip}:${serverInfo.port}`;
 					const logPrefix = formatServiceLog(serverInfo.name, serverInfo.ip, ins.module, ins.identity);
 					const hasService = Boolean(ins.identity);
+					const targetText = `${ins.module}${hasService ? `（${ins.identity}）` : "（仅文件）"} → ${removeSlash(ins.path)}`;
+					// 失败时写入服务器发布日志：发布失败 <目标>：<原因>
+					const writeFailLog = async (reason: string) => {
+						await appendRemoteLogLine({
+							isWindows: Number(serverInfo.os) === 1,
+							username: uName,
+							password: uPwd,
+							server: serverAddress,
+							logPath: `${stagingBase}/发布日志.log`,
+							line: `发布失败 ${targetText}：${reason}`,
+						});
+					};
+					// 发布开始：写入服务器发布日志
+					await appendRemoteLogLine({
+						isWindows: Number(serverInfo.os) === 1,
+						username: uName,
+						password: uPwd,
+						server: serverAddress,
+						logPath: `${stagingBase}/发布日志.log`,
+						line: `发布开始 ${targetText}`,
+					});
 					printInfoLog(
 						`发布目标：${ins.module}${ins.identity ? `（服务标识 ${ins.identity}）` : "（无服务标识，仅替换文件）"} @ ${displayOs(Number(serverInfo.os))} ${serverAddress}`
 					);
@@ -2497,6 +2526,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 						const closeResult = await stopInstanceService(serverInfo, ins);
 						if (!closeResult) {
 							printInfoLog(`${logPrefix} 关闭失败.`, "log-error");
+							await writeFailLog("关闭服务失败");
 							return false;
 						}
 						printInfoLog(
@@ -2528,11 +2558,13 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 						});
 					} else {
 						printInfoLog(`未找到 ${displayOs(Number(serverInfo.os))} 部署环境，请检查.`, "log-error");
+						await writeFailLog(`未找到 ${displayOs(Number(serverInfo.os))} 部署环境`);
 						return false;
 					}
 				if (replaceResult.code !== 0) {
 					printInfoLog(`替换程序集失败（${stagingBase}/${ins.module} → ${removeSlash(ins.path)}）：${replaceResult.data}`, "log-error");
 					printInfoLog(`服务已停止且未完成替换，请检查暂存路径后手动恢复：可先执行【上传程序集】再重新【发布】，或手动启动服务.`, "log-warning");
+					await writeFailLog("替换程序集失败");
 					return false;
 				}
 				printInfoLog(
@@ -2548,6 +2580,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 					const startResult = await startInstanceService(serverInfo, ins);
 					if (!startResult) {
 						printInfoLog(`${logPrefix} 启动失败.`, "log-error");
+						await writeFailLog("启动服务失败");
 						return false;
 					}
 					printInfoLog(`${logPrefix} 已启动，耗时 ${formatElapsed(Date.now() - startStartTime)}.`, "log-success");
@@ -2566,7 +2599,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 					password: uPwd,
 					server: serverAddress,
 					logPath: `${stagingBase}/发布日志.log`,
-					line: `发布 ${ins.module}${hasService ? `（${ins.identity}）` : "（仅文件）"} → ${removeSlash(ins.path)}`,
+					line: `发布成功 ${targetText}`,
 				});
 				return true;
 			});

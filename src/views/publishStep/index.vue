@@ -10,7 +10,7 @@
                             <svg-icon :size="32" :name="fun.iconFont" :class="fun.iconFont"
                                 :color="`var(${fun.iconColor})`" />
                         </div>
-                        <div>{{ fun.title }}</div>
+                        <div class="menu-item_title">{{ fun.title }}</div>
                     </div>
                 </el-tooltip>
             </div>
@@ -34,7 +34,7 @@
                             <span class="menu-item">
                                 <svg-icon :size="32" :name="item.iconFont" :class="item.iconFont"
                                     :color="`var(${item.iconColor})`" />
-                                <div>{{ item.title }}</div>
+                                <div class="menu-item_title">{{ item.title }}</div>
                             </span>
                         </el-dropdown-item>
                     </el-dropdown-menu>
@@ -449,6 +449,7 @@ import {
     ref,
     computed,
     onBeforeMount,
+    onBeforeUnmount,
     defineAsyncComponent,
 } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -462,7 +463,8 @@ import {
     removeSlash,
     getDefaultSubObject,
 } from "@/utils/other";
-import { loadPublishSettings } from "@/utils/publishSettings";
+import { loadPublishSettings, getPublishModuleOrder } from "@/utils/publishSettings";
+import mittBus from "@/utils/mitt";
 import { useStepLog } from "@/composables/useStepLog";
 import {
     useStepPublish,
@@ -514,6 +516,12 @@ const spcMonitorName = ref("SpcMonitor");
 // ==================== 发布信息卡：应用类型模块 ====================
 // 五种应用类型配置结构一致（clientPath + serverArr），抽取成列表循环渲染；
 // wpfClient 的额外行（生成目录/打包）在模板内用 key 区分
+// 展示顺序跟随设置页「发布顺序」配置（顺序外的模块名排在末尾）
+const publishModuleOrder = ref<string[]>(getPublishModuleOrder());
+const refreshPublishModuleOrder = async () => {
+    await loadPublishSettings();
+    publishModuleOrder.value = getPublishModuleOrder();
+};
 const appModuleList = computed(() => {
     const items = state.publishData.appconfigData.configItems;
     if (!items) return [];
@@ -527,7 +535,12 @@ const appModuleList = computed(() => {
             { key: "wpfClient", name: wpfClientName.value },
             { key: "spcMonitor", name: spcMonitorName.value },
         ];
+    const rank = (name: string) => {
+        const idx = publishModuleOrder.value.indexOf(name);
+        return idx === -1 ? publishModuleOrder.value.length : idx;
+    };
     return defs
+        .sort((a, b) => rank(a.name) - rank(b.name))
         .map((d) => ({ ...d, mod: items[d.key] }))
         .filter((d) => !!d.mod?.clientPath)
         .map((d, index, arr) => ({ ...d, isLast: index === arr.length - 1 }));
@@ -1468,6 +1481,13 @@ const onProjectChange = async (val: number) => {
 // 页面加载完时
 onBeforeMount(async () => {
     await getProjectDefault();
+    // 发布信息卡的应用类型排序依赖设置页「发布顺序」，进入页面先刷新一次缓存
+    await refreshPublishModuleOrder();
+    mittBus.on("settingsChanged", refreshPublishModuleOrder);
+});
+
+onBeforeUnmount(() => {
+    mittBus.off("settingsChanged", refreshPublishModuleOrder);
 });
 
 // keep-alive 重新激活页签：保持缓存状态，不重新查询刷新数据
@@ -1527,7 +1547,7 @@ $log-console-text: #ffffff;
             align-items: center;
             justify-content: center;
             gap: 0.625rem;
-            padding: 0.2rem 1rem;
+            padding: 0.3rem 1rem;
             cursor: pointer;
 
             // hover 效果：上浮 + 边框高亮 + 阴影
@@ -1816,7 +1836,11 @@ $log-console-text: #ffffff;
     align-items: center;
     gap: 0.625rem;
     white-space: nowrap;
-    font-size: 1.3rem;
+
+    .menu-item_title {
+        font-size: 1.1rem;
+        font-weight: 500;
+    }
 }
 
 // el-table 单元格：超出宽度时换行显示（待发布程序集 / 服务状态共用）

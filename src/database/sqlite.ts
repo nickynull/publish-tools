@@ -107,6 +107,9 @@ async function ensureSchema(database: Database) {
         win_copy_retry_interval INTEGER DEFAULT 2,
         upload_retry_count INTEGER DEFAULT 99,
         upload_retry_interval INTEGER DEFAULT 3,
+        win_service_start_timeout INTEGER DEFAULT 20,
+        win_service_stop_timeout INTEGER DEFAULT 20,
+        publish_module_order TEXT DEFAULT 'WebApiHost,WebClient,ScheduleServer,WpfClient,SpcMonitor',
         update_time TEXT
     )`);
 
@@ -128,6 +131,14 @@ async function ensureSchema(database: Database) {
     const serverColumns = await database.select<{ name: string }[]>("PRAGMA table_info(t_server)");
     if (!serverColumns.some((column) => column.name === "source_key")) {
         await database.execute("ALTER TABLE t_server ADD COLUMN source_key TEXT");
+    }
+    // 项目发布STEP：服务备份路径（备份服务时存放日期文件夹的目录）
+    if (!serverColumns.some((column) => column.name === "service_backup_path")) {
+        await database.execute("ALTER TABLE t_server ADD COLUMN service_backup_path TEXT");
+    }
+    // 项目发布STEP：程序集暂存路径（上传待发布程序集的目录，发布时替换到服务路径）
+    if (!serverColumns.some((column) => column.name === "assembly_staging_path")) {
+        await database.execute("ALTER TABLE t_server ADD COLUMN assembly_staging_path TEXT");
     }
     // 部分唯一索引：纳管行的 source_key 唯一（NULL 不受限制，本地自建行可多行为 NULL）
     await database.execute(
@@ -154,6 +165,17 @@ async function ensureSchema(database: Database) {
     }
     if (!syncSettingsColumns.some((column) => column.name === "upload_retry_interval")) {
         await database.execute("ALTER TABLE t_settings ADD COLUMN upload_retry_interval INTEGER DEFAULT 3");
+    }
+
+    // t_settings 加服务启停等待超时（sc 命令后轮询确认状态的最长等待秒数）与发布模块顺序（逗号分隔）
+    if (!syncSettingsColumns.some((column) => column.name === "win_service_start_timeout")) {
+        await database.execute("ALTER TABLE t_settings ADD COLUMN win_service_start_timeout INTEGER DEFAULT 20");
+    }
+    if (!syncSettingsColumns.some((column) => column.name === "win_service_stop_timeout")) {
+        await database.execute("ALTER TABLE t_settings ADD COLUMN win_service_stop_timeout INTEGER DEFAULT 20");
+    }
+    if (!syncSettingsColumns.some((column) => column.name === "publish_module_order")) {
+        await database.execute("ALTER TABLE t_settings ADD COLUMN publish_module_order TEXT DEFAULT 'WebApiHost,WebClient,ScheduleServer,WpfClient,SpcMonitor'");
     }
 
     // ========== 改列（服务重试列名由 stop_retry 统一为 retry，老库存在旧列则逐列重命名） ==========

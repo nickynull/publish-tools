@@ -90,6 +90,7 @@
               <el-radio-group v-model="selectTfsItem.selectModel" @change="onSelectTfsModelChange">
                 <el-radio-button label="日期" value="日期" />
                 <el-radio-button label="变更集" value="变更集" />
+                <el-radio-button label="最近时间" value="最近时间" />
               </el-radio-group>
             </el-col>
             <el-col :span="8" class="mb10">
@@ -98,16 +99,24 @@
                   v-model="selectTfsItem.selectValue[0].value" type="datetime"
                   :default-time="DEFAULT_DATE_TIME_START"
                   :placeholder="selectTfsItem.selectValue[0].placeholder" />
+                <el-input v-else-if="selectTfsItem.selectModel === '最近时间'"
+                  v-model="selectTfsItem.selectValue[0].value"
+                  :placeholder="selectTfsItem.selectValue[0].placeholder" maxlength="4" clearable>
+                  <template #append>天</template>
+                </el-input>
                 <el-input v-else v-model="selectTfsItem.selectValue[0].value"
                   :placeholder="selectTfsItem.selectValue[0].placeholder" maxlength="150" clearable></el-input>
               </el-form-item>
             </el-col>
-            <el-col :span="1" class="mb10">
+            <el-col :span="1" class="mb10" v-if="selectTfsItem.selectModel !== '最近时间'">
               <div class="range-separator">~</div>
             </el-col>
             <el-col :span="9" class="mb10">
               <el-form-item label-width="0px">
-                <el-date-picker class="w100" v-if="selectTfsItem.selectModel === '日期'"
+                <div v-if="selectTfsItem.selectModel === '最近时间'" class="recent-days-tip">
+                  结束为今天 23:59:59，每次获取时按天数动态计算
+                </div>
+                <el-date-picker v-else-if="selectTfsItem.selectModel === '日期'" class="w100"
                   v-model="selectTfsItem.selectValue[1].value" type="datetime"
                   :default-time="DEFAULT_DATE_TIME_END"
                   :placeholder="selectTfsItem.selectValue[1].placeholder" />
@@ -122,6 +131,7 @@
               <el-radio-group v-model="selectGitItem.selectModel" @change="onSelectGitModelChange">
                 <el-radio-button label="日期" value="日期" />
                 <el-radio-button label="变更集" value="变更集" />
+                <el-radio-button label="最近时间" value="最近时间" />
               </el-radio-group>
             </el-col>
             <el-col :span="8" class="mb10">
@@ -130,16 +140,24 @@
                   v-model="selectGitItem.selectValue[0].value" type="datetime"
                   :default-time="DEFAULT_DATE_TIME_START"
                   :placeholder="selectGitItem.selectValue[0].placeholder" />
+                <el-input v-else-if="selectGitItem.selectModel === '最近时间'"
+                  v-model="selectGitItem.selectValue[0].value"
+                  :placeholder="selectGitItem.selectValue[0].placeholder" maxlength="4" clearable>
+                  <template #append>天</template>
+                </el-input>
                 <el-input v-else v-model="selectGitItem.selectValue[0].value"
                   :placeholder="selectGitItem.selectValue[0].placeholder" maxlength="150" clearable></el-input>
               </el-form-item>
             </el-col>
-            <el-col :span="1" class="mb10">
+            <el-col :span="1" class="mb10" v-if="selectGitItem.selectModel !== '最近时间'">
               <div class="range-separator">~</div>
             </el-col>
             <el-col :span="9" class="mb10">
               <el-form-item label-width="0px">
-                <el-date-picker class="w100" v-if="selectGitItem.selectModel === '日期'"
+                <div v-if="selectGitItem.selectModel === '最近时间'" class="recent-days-tip">
+                  结束为今天 23:59:59，每次获取时按天数动态计算
+                </div>
+                <el-date-picker v-else-if="selectGitItem.selectModel === '日期'" class="w100"
                   v-model="selectGitItem.selectValue[1].value" type="datetime"
                   :default-time="DEFAULT_DATE_TIME_END"
                   :placeholder="selectGitItem.selectValue[1].placeholder" />
@@ -522,6 +540,7 @@ import { useServerDb } from "@/database/servers/index";
 import { useTfsDb } from "@/database/teamFoundationServer/index";
 import { useGitDb } from "@/database/git/index";
 import { formatDate, DEFAULT_DATE_TIME_START, DEFAULT_DATE_TIME_END } from "@/utils/formatTime";
+import { isCommitSelectModel } from "@/utils/sourceControl";
 import { getDefaultSubObject, removeSlash, displayEnvironment } from "@/utils/other";
 import { useWorkstationStore } from "@/stores/workstation";
 
@@ -1137,7 +1156,7 @@ const onGitChange = async (val: number) => {
 };
 
 // TFS模式切换
-const onSelectTfsModelChange = (val: "日期" | "变更集") => {
+const onSelectTfsModelChange = (val: "日期" | "变更集" | "最近时间") => {
   selectTfsItem.value.selectModel = val;
   if (val === "日期") {
     selectTfsItem.value.selectValue = [
@@ -1147,6 +1166,17 @@ const onSelectTfsModelChange = (val: "日期" | "变更集") => {
       },
       {
         placeholder: "日期结束(选填，空为最新)",
+        value: "",
+      },
+    ];
+  } else if (val === "最近时间") {
+    selectTfsItem.value.selectValue = [
+      {
+        placeholder: "最近天数(必填，如 3 表示最近3天)",
+        value: "",
+      },
+      {
+        placeholder: "(自动计算，无需填写)",
         value: "",
       },
     ];
@@ -1164,7 +1194,7 @@ const onSelectTfsModelChange = (val: "日期" | "变更集") => {
   }
 };
 
-const onSelectGitModelChange = (val: "日期" | "commit") => {
+const onSelectGitModelChange = (val: "日期" | "变更集" | "commit" | "最近时间") => {
   selectGitItem.value.selectModel = val;
   if (val === "日期") {
     selectGitItem.value.selectValue = [
@@ -1174,6 +1204,17 @@ const onSelectGitModelChange = (val: "日期" | "commit") => {
       },
       {
         placeholder: "日期结束(选填，空为最新)",
+        value: "",
+      },
+    ];
+  } else if (val === "最近时间") {
+    selectGitItem.value.selectValue = [
+      {
+        placeholder: "最近天数(必填，如 3 表示最近3天)",
+        value: "",
+      },
+      {
+        placeholder: "(自动计算，无需填写)",
         value: "",
       },
     ];
@@ -1203,6 +1244,23 @@ const formRules = reactive<FormRules>({
           callback(new Error("请选择日期范围！"));
         } else if (!dllModeValue && state.ruleForm.dllMode === "DLL名称") {
           callback(new Error("请输入DLL名称！"));
+        } else if (state.ruleForm.dllMode === "TFS" || state.ruleForm.dllMode === "Git") {
+          // TFS/Git 的[最近时间]模式：天数为必填正整数
+          let daysValid = true;
+          try {
+            const selectItem = JSON.parse(String(dllModeValue || "{}"));
+            if (selectItem && selectItem.selectModel === "最近时间") {
+              const days = Number(selectItem.selectValue ? selectItem.selectValue[0]?.value : "");
+              daysValid = Number.isInteger(days) && days >= 1 && days <= 3650;
+            }
+          } catch (error) {
+            daysValid = false;
+          }
+          if (!daysValid) {
+            callback(new Error("请输入最近天数（正整数，如 3 表示最近3天）！"));
+          } else {
+            callback();
+          }
         } else {
           callback();
         }
@@ -1304,7 +1362,13 @@ const fillFormFromRow = (row: RowAppconfigType | any) => {
   }
 
   if (state.ruleForm.dllModeValue && state.ruleForm.dllMode == "Git") {
-    try { selectGitItem.value = JSON.parse(state.ruleForm.dllModeValue as string); } catch { /* 兼容脏数据 */ }
+    try {
+      selectGitItem.value = JSON.parse(state.ruleForm.dllModeValue as string);
+      // 兼容历史数据：早期该模式可能被写成 "commit"，统一成界面选项值「变更集」，否则单选组无法回显
+      if (isCommitSelectModel(selectGitItem.value.selectModel)) {
+        selectGitItem.value.selectModel = "变更集";
+      }
+    } catch { /* 兼容脏数据 */ }
   }
 };
 
@@ -1870,5 +1934,15 @@ defineExpose({
   text-align: center;
   height: 32px;
   line-height: 32px;
+}
+
+.recent-days-tip {
+  height: 32px;
+  line-height: 32px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 </style>

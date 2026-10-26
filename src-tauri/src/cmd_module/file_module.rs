@@ -1,5 +1,9 @@
+use crate::cmd_module::cancel::{check_cancelled, is_cancelled, sleep_with_cancel, CANCELLED_MSG};
 use crate::cmd_module::ssh_pool;
-use crate::utils::compression::{create_zip, unzip_files};
+use crate::utils::compression::{
+    copy_with_progress, create_zip, scan_zip_sources, unzip_files, with_mtime,
+};
+use crate::utils::progress::ProgressState;
 use crate::utils::msbuild::build_project;
 use chrono::{DateTime, Local, NaiveDateTime};
 use encoding_rs::GBK;
@@ -9,18 +13,57 @@ use std::ffi::OsStr;
 use std::fs;
 use std::fs::File;
 use std::io::ErrorKind;
-use std::io::{self, Read, Write};
+use std::io::{Read, Write};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::str;
 use std::time::Instant;
-use std::{thread, time::Duration};
+use std::time::Duration;
 use walkdir::WalkDir;
 use zip::{write::FileOptions, ZipWriter};
 
 const MAX_RETRIES: u32 = 3;
 const RETRY_DELAY: Duration = Duration::from_secs(2);
+
+/// 重试事件推送给前端的事件名（前端 listen 后写入界面日志）
+const RETRY_EVENT: &str = "backend-retry";
+
+/// 上传/下载分块大小（256KB）：按块读写以便在长任务中途推进进度
+const IO_CHUNK: usize = 256 * 1024;
+
+/// 向前端推送一条重试事件（同时在终端打印，便于开发排查）
+///
+/// 事件负载：`{ "source": 来源命令, "attempt": 当前第几次, "total": 总次数,
+///             "willRetry": 是否还会重试, "message": 错误信息 }`
+/// 前端未监听时 emit 失败可忽略，不影响主流程。
+fn emit_retry(
+    app: Option<&tauri::AppHandle>,
+    source: &str,
+    attempt: u32,
+    total: u32,
+    will_retry: bool,
+    message: &str,
+) {
+    if will_retry {
+        eprintln!("尝试 {} 失败: {}，正在重试...", attempt, message);
+    } else {
+        eprintln!("尝试 {} 失败: {}，已达最大次数.", attempt, message);
+    }
+    if let Some(app) = app {
+        use tauri::Emitter;
+        let _ = app.emit(
+            RETRY_EVENT,
+            serde_json::json!({
+                "source": source,
+                "attempt": attempt,
+                "total": total,
+                "willRetry": will_retry,
+                "message": message,
+            }),
+        );
+    }
+}
 
 /// 智能解码字节流：优先尝试 UTF-8，失败回退到 GBK
 ///
@@ -79,6 +122,7 @@ pub async fn server_connection(
 /// * `Err(String)` 失败
 #[tauri::command]
 pub async fn execute_remote_command(
+    app: tauri::AppHandle,
     username: &str,
     password: &str,
     server: &str,
@@ -94,13 +138,25 @@ pub async fn execute_remote_command(
     let mut attempts = 0;
 
     while attempts < max_attempts {
+        if let Err(e) = check_cancelled() {
+            return Err(e);
+        }
         match remote_command(username, password, server, command).await {
             Ok(output) => return Ok(output),
             Err(e) => {
-                eprintln!("尝试 {} 失败: {}，正在重试...", attempts + 1, e);
                 attempts += 1;
+                emit_retry(
+                    Some(&app),
+                    "远程命令",
+                    attempts,
+                    max_attempts,
+                    attempts < max_attempts,
+                    &e,
+                );
                 if attempts < max_attempts {
-                    thread::sleep(delay);
+                    if !sleep_with_cancel(delay) {
+                        return Err(CANCELLED_MSG.to_string());
+                    }
                 }
             }
         }
@@ -282,7 +338,8 @@ pub async fn create_dir(path: &str) -> Result<bool, String> {
 /// * `Ok(true)` 成功
 /// * `Err(String)` 失败
 #[tauri::command]
-pub async fn zip_dir(src_dir: &str, dst_file: &str) -> Result<bool, String> {
+pub async fn zip_dir(app: tauri::AppHandle, src_dir: &str, dst_file: &str) -> Result<bool, String> {
+    let mut progress = ProgressState::new(Some(&app));
     let path = Path::new(src_dir);
     let file = File::create(dst_file).map_err(|e| e.to_string())?;
     let mut zip = ZipWriter::new(file);
@@ -290,6 +347,11 @@ pub async fn zip_dir(src_dir: &str, dst_file: &str) -> Result<bool, String> {
     let options = FileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated)
         .unix_permissions(0o755);
+
+    // 预扫描：文件数与总字节作为进度分母（扫描失败退化为 0，即不定长展示）
+    let (file_total, total_bytes) = scan_zip_sources(&[src_dir]);
+    let mut file_index: u32 = 0;
+    let mut processed: u64 = 0;
 
     for entry in WalkDir::new(path) {
         let entry = entry.map_err(|e| e.to_string())?;
@@ -299,19 +361,37 @@ pub async fn zip_dir(src_dir: &str, dst_file: &str) -> Result<bool, String> {
             .map_err(|e| e.to_string())?;
 
         if path.is_file() {
+            file_index += 1;
+            let file_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
             // zip.start_file_from_path(name, options)
-            zip.start_file(path_to_string(name), options)
+            // 写入本地修改时间：避免「打包上传 → 服务端解压」后文件时间变成 1980 年
+            zip.start_file(path_to_string(name), with_mtime(options, path))
                 .map_err(|e| e.to_string())?;
             let mut f = File::open(path).map_err(|e| e.to_string())?;
-            io::copy(&mut f, &mut zip).map_err(|e| e.to_string())?;
+            copy_with_progress(
+                &mut f,
+                &mut zip,
+                &file_name,
+                file_index,
+                file_total,
+                &mut processed,
+                total_bytes,
+                Some(&mut progress),
+            )
+            .map_err(|e| e.to_string())?;
         } else if path.is_dir() && !name.as_os_str().is_empty() {
             // zip.add_directory_from_path(name, options)
-            zip.add_directory(path_to_string(name), options)
+            zip.add_directory(path_to_string(name), with_mtime(options, path))
                 .map_err(|e| e.to_string())?;
         }
     }
 
     zip.finish().map_err(|e| e.to_string())?;
+    progress.emit_force("zip", "", processed, total_bytes, file_index, file_total);
     Ok(true)
 }
 
@@ -338,11 +418,16 @@ fn path_to_string(path: &std::path::Path) -> String {
 /// * `Ok(true)` 成功
 /// * `Err(String)` 失败
 #[tauri::command]
-pub async fn compress_zip(file_paths: Vec<String>, dst_file: &str) -> Result<bool, String> {
+pub async fn compress_zip(
+    app: tauri::AppHandle,
+    file_paths: Vec<String>,
+    dst_file: &str,
+) -> Result<bool, String> {
+    let mut progress = ProgressState::new(Some(&app));
     // 直接将Vec<String>转换为Vec<&str>，减少中间步骤
     let file_paths: Vec<&str> = file_paths.iter().map(String::as_str).collect();
     // 调用create_zip函数并处理结果
-    create_zip(&file_paths, dst_file)
+    create_zip(&file_paths, dst_file, Some(&mut progress))
         .map_err(|e| e.to_string())
         .map(|_| true)
 }
@@ -608,6 +693,9 @@ pub async fn copy_path(
         .unwrap_or(RETRY_DELAY);
     let mut last_err = String::new();
     for attempt in 1..=max_attempts {
+        if let Err(e) = check_cancelled() {
+            return Err(e);
+        }
         match fs::copy(source, destination) {
             Ok(_) => return Ok(true),
             Err(e) => {
@@ -620,7 +708,9 @@ pub async fn copy_path(
                     last_err
                 );
                 if attempt < max_attempts {
-                    thread::sleep(delay);
+                    if !sleep_with_cancel(delay) {
+                        return Err(CANCELLED_MSG.to_string());
+                    }
                 }
             }
         }
@@ -978,29 +1068,44 @@ pub async fn delete_dir(path: &str) -> Result<bool, String> {
 /// * `Err(String)` 失败
 #[tauri::command]
 pub async fn download_server_files(
+    app: tauri::AppHandle,
     local_paths: Vec<String>,
     remote_paths: Vec<String>,
     username: &str,
     password: &str,
     server: &str,
 ) -> Result<bool, String> {
+    let mut progress = ProgressState::new(Some(&app));
     let mut attempts = 0;
     let mut err_msg = String::new();
     while attempts < MAX_RETRIES {
+        if let Err(e) = check_cancelled() {
+            return Err(e);
+        }
         match exec_download_server_files(
             local_paths.clone(),
             remote_paths.clone(),
             username,
             password,
             server,
+            &mut progress,
         )
         .await
         {
             Ok(output) => return Ok(output),
             Err(e) => {
-                eprintln!("尝试 {} 失败: {}，正在重试...", attempts + 1, e);
                 attempts += 1;
-                thread::sleep(RETRY_DELAY);
+                emit_retry(
+                    Some(&app),
+                    "下载文件",
+                    attempts,
+                    MAX_RETRIES,
+                    attempts < MAX_RETRIES,
+                    &e,
+                );
+                if attempts < MAX_RETRIES && !sleep_with_cancel(RETRY_DELAY) {
+                    return Err(CANCELLED_MSG.to_string());
+                }
                 err_msg = e.to_string();
             }
         }
@@ -1028,10 +1133,12 @@ async fn exec_download_server_files(
     username: &str,
     password: &str,
     server: &str,
+    progress: &mut ProgressState,
 ) -> Result<bool, String> {
     if local_paths.len() != remote_paths.len() {
         return Err("本地路径和远程路径的数量必须相同.".into());
     }
+    let file_total = local_paths.len() as u32;
 
     // 从连接池取（或新建）已认证的 SSH 会话
     let shared = ssh_pool::get_session(username, password, server)?;
@@ -1043,7 +1150,10 @@ async fn exec_download_server_files(
             .session
             .sftp()
             .map_err(|e| format!("无法创建 SFTP 会话: {}", e))?;
-        for (local_path, remote_path) in local_paths.iter().zip(remote_paths.iter()) {
+        for (index, (local_path, remote_path)) in
+            local_paths.iter().zip(remote_paths.iter()).enumerate()
+        {
+            let file_index = (index + 1) as u32;
             let local_path = Path::new(local_path);
             let remote_path = Path::new(remote_path);
             if remote_path_is_dir(&sftp, remote_path) {
@@ -1059,16 +1169,28 @@ async fn exec_download_server_files(
                             .map_err(|e| format!("无法创建本地目录: {:?}", e))?;
                     } else {
                         // 下载文件
-                        if !download_server_file(entry_path, &local_file_path, &sftp) {
-                            return Err(format!("下载文件[{}]失败！", entry_path.display()));
-                        }
+                        download_server_file(
+                            entry_path,
+                            &local_file_path,
+                            &sftp,
+                            progress,
+                            file_index,
+                            file_total,
+                        )
+                        .map_err(|e| format!("下载文件[{}]失败！{}", entry_path.display(), e))?;
                     }
                 }
             } else {
                 // 下载单个文件
-                if !download_server_file(remote_path, local_path, &sftp) {
-                    return Err(format!("下载文件[{}]失败！", remote_path.display()));
-                }
+                download_server_file(
+                    remote_path,
+                    local_path,
+                    &sftp,
+                    progress,
+                    file_index,
+                    file_total,
+                )
+                .map_err(|e| format!("下载文件[{}]失败！{}", remote_path.display(), e))?;
             }
         }
 
@@ -1103,33 +1225,75 @@ fn remote_path_is_dir(sftp: &ssh2::Sftp, path: &Path) -> bool {
     }
 }
 
-/// 下载远程服务器文件
+/// 下载远程服务器文件（分块读写，中途推送进度）
 ///
 /// # Arguments
 /// * `remote_path` - 远程文件路径
 /// * `local_path` - 本地文件路径
 /// * `sftp` - SFTP会话
+/// * `progress` - 进度推送器
+/// * `file_index` - 第几个文件（1-based）
+/// * `file_total` - 共几个文件
 ///
 /// # Returns
-/// * `true` 成功
-/// * `false` 失败
-fn download_server_file(remote_path: &Path, local_path: &Path, sftp: &ssh2::Sftp) -> bool {
-    match sftp.open(remote_path) {
-        Ok(mut remote_file) => {
-            if let Ok(mut local_file) = File::create(local_path) {
-                let mut buffer = Vec::new();
-                if remote_file.read_to_end(&mut buffer).is_ok()
-                    && local_file.write_all(&buffer).is_ok()
-                {
-                    return true;
-                }
-            }
+/// * `Ok(())` 成功
+/// * `Err(String)` 失败（含手动停止）
+fn download_server_file(
+    remote_path: &Path,
+    local_path: &Path,
+    sftp: &ssh2::Sftp,
+    progress: &mut ProgressState,
+    file_index: u32,
+    file_total: u32,
+) -> Result<(), String> {
+    // 远程文件大小：stat 失败时为 0，退化为不定长进度（只显示已下载字节）
+    let total = sftp.stat(remote_path).ok().and_then(|s| s.size).unwrap_or(0);
+    let file_name = remote_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+
+    let mut remote_file = sftp
+        .open(remote_path)
+        .map_err(|e| format!("无法打开远程文件: {}", e))?;
+    let mut local_file = File::create(local_path)
+        .map_err(|e| format!("无法创建本地文件[{}]: {}", local_path.display(), e))?;
+
+    let mut buffer = vec![0u8; IO_CHUNK];
+    let mut transferred: u64 = 0;
+    loop {
+        if is_cancelled() {
+            return Err(CANCELLED_MSG.to_string());
         }
-        Err(e) => {
-            eprintln!("无法打开远程文件: {:?}", e);
+        let read_len = remote_file
+            .read(&mut buffer)
+            .map_err(|e| format!("读取远程文件失败: {}", e))?;
+        if read_len == 0 {
+            break;
         }
+        local_file
+            .write_all(&buffer[..read_len])
+            .map_err(|e| format!("写入本地文件[{}]失败: {}", local_path.display(), e))?;
+        transferred += read_len as u64;
+        progress.emit(
+            "download",
+            &file_name,
+            transferred,
+            total,
+            file_index,
+            file_total,
+        );
     }
-    false
+    progress.emit_force(
+        "download",
+        &file_name,
+        transferred,
+        total,
+        file_index,
+        file_total,
+    );
+    Ok(())
 }
 
 /// 上传文件到服务器
@@ -1146,6 +1310,7 @@ fn download_server_file(remote_path: &Path, local_path: &Path, sftp: &ssh2::Sftp
 /// * `Err(String)` 失败
 #[tauri::command]
 pub async fn upload_server_files(
+    app: tauri::AppHandle,
     remote_paths: Vec<String>,
     local_paths: Vec<String>,
     username: &str,
@@ -1154,6 +1319,7 @@ pub async fn upload_server_files(
     retry_count: Option<u32>,
     retry_interval_secs: Option<u64>,
 ) -> Result<bool, String> {
+    let mut progress = ProgressState::new(Some(&app));
     // retry_count = None → 内建默认 3 次/2s（直连调用点行为不变）；前端重试包装传 1 单发，重试由前端控制
     let max_attempts = retry_count.unwrap_or(MAX_RETRIES).max(1);
     let delay = retry_interval_secs
@@ -1163,21 +1329,34 @@ pub async fn upload_server_files(
     let mut attempts = 0;
     let mut err_msg = String::new();
     while attempts < max_attempts {
+        if let Err(e) = check_cancelled() {
+            return Err(e);
+        }
         match exec_upload_server_files(
             remote_paths.clone(),
             local_paths.clone(),
             username,
             password,
             server,
+            &mut progress,
         )
         .await
         {
             Ok(output) => return Ok(output),
             Err(e) => {
-                eprintln!("尝试 {} 失败: {}，正在重试...", attempts + 1, e);
                 attempts += 1;
+                emit_retry(
+                    Some(&app),
+                    "上传文件",
+                    attempts,
+                    max_attempts,
+                    attempts < max_attempts,
+                    &e,
+                );
                 if attempts < max_attempts {
-                    thread::sleep(delay);
+                    if !sleep_with_cancel(delay) {
+                        return Err(CANCELLED_MSG.to_string());
+                    }
                 }
                 err_msg = e.to_string();
             }
@@ -1206,10 +1385,12 @@ async fn exec_upload_server_files(
     username: &str,
     password: &str,
     server: &str,
+    progress: &mut ProgressState,
 ) -> Result<bool, String> {
     if local_paths.len() != remote_paths.len() {
         return Err("本地路径和远程路径的数量必须相同.".into());
     }
+    let file_total = local_paths.len() as u32;
 
     // 从连接池取（或新建）已认证的 SSH 会话
     let shared = ssh_pool::get_session(username, password, server)?;
@@ -1221,7 +1402,10 @@ async fn exec_upload_server_files(
             .session
             .sftp()
             .map_err(|e| format!("无法创建 SFTP 会话: {}", e))?;
-        for (local_path, remote_path) in local_paths.iter().zip(remote_paths.iter()) {
+        for (index, (local_path, remote_path)) in
+            local_paths.iter().zip(remote_paths.iter()).enumerate()
+        {
+            let file_index = (index + 1) as u32;
             let local_path = Path::new(local_path);
             let remote_path = Path::new(remote_path);
             if local_path.is_dir() {
@@ -1238,16 +1422,28 @@ async fn exec_upload_server_files(
                             .map_err(|e| format!("无法创建远程目录: {:?}", e))?;
                     } else {
                         // 上传文件
-                        if !upload_server_file(entry_path, &remote_file_path, &sftp) {
-                            return Err(format!("上传文件[{}]失败！", entry_path.display()));
-                        }
+                        upload_server_file(
+                            entry_path,
+                            &remote_file_path,
+                            &sftp,
+                            progress,
+                            file_index,
+                            file_total,
+                        )
+                        .map_err(|e| format!("上传文件[{}]失败！{}", entry_path.display(), e))?;
                     }
                 }
             } else {
                 // 上传单个文件
-                if !upload_server_file(local_path, remote_path, &sftp) {
-                    return Err(format!("上传文件[{}]失败！", local_path.display()));
-                }
+                upload_server_file(
+                    local_path,
+                    remote_path,
+                    &sftp,
+                    progress,
+                    file_index,
+                    file_total,
+                )
+                .map_err(|e| format!("上传文件[{}]失败！{}", local_path.display(), e))?;
             }
         }
 
@@ -1264,48 +1460,99 @@ async fn exec_upload_server_files(
     }
 }
 
-/// 上传服务器文件
+/// 上传服务器文件（分块读写，中途推送进度）
 ///
 /// # Arguments
-/// * `local_paths` - 本地文件|目录路径
-/// * `remote_paths` - 远程文件|目录路径
+/// * `local_path` - 本地文件路径
+/// * `remote_path` - 远程文件路径
 /// * `sftp` - SFTP会话
+/// * `progress` - 进度推送器
+/// * `file_index` - 第几个文件（1-based）
+/// * `file_total` - 共几个文件
 ///
 /// # Returns
-/// * `true` 成功
-/// * `false` 失败
-fn upload_server_file(local_path: &Path, remote_path: &Path, sftp: &ssh2::Sftp) -> bool {
+/// * `Ok(())` 成功
+/// * `Err(String)` 失败（含手动停止）
+fn upload_server_file(
+    local_path: &Path,
+    remote_path: &Path,
+    sftp: &ssh2::Sftp,
+    progress: &mut ProgressState,
+    file_index: u32,
+    file_total: u32,
+) -> Result<(), String> {
     // 打开本地文件
-    let local_file_result = File::open(local_path);
-    let mut local_file = match local_file_result {
-        Ok(file) => file,
-        Err(e) => {
-            println!("无法打开本地文件 {}: {}", local_path.display(), e);
-            return false;
-        }
-    };
+    let mut local_file = File::open(local_path)
+        .map_err(|e| format!("无法打开本地文件[{}]: {}", local_path.display(), e))?;
+    let total = fs::metadata(local_path).map(|m| m.len()).unwrap_or(0);
+    let file_name = local_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
 
     // 创建远程文件
-    let mut remote_file = match sftp.create(remote_path) {
-        Ok(file) => file,
-        Err(e) => {
-            println!("无法创建远程文件 {}: {}", remote_path.display(), e);
-            return false;
+    let mut remote_file = sftp
+        .create(remote_path)
+        .map_err(|e| format!("无法创建远程文件[{}]: {}", remote_path.display(), e))?;
+
+    // 分块写入远程文件，便于长任务中途推送进度
+    let mut buffer = vec![0u8; IO_CHUNK];
+    let mut transferred: u64 = 0;
+    loop {
+        if is_cancelled() {
+            return Err(CANCELLED_MSG.to_string());
         }
-    };
-
-    // 将本地文件内容写入远程文件
-    let mut buffer = Vec::new();
-    if local_file.read_to_end(&mut buffer).is_err() {
-        println!("无法读取本地文件 {}", local_path.display());
-        return false;
+        let read_len = local_file
+            .read(&mut buffer)
+            .map_err(|e| format!("读取本地文件[{}]失败: {}", local_path.display(), e))?;
+        if read_len == 0 {
+            break;
+        }
+        remote_file
+            .write_all(&buffer[..read_len])
+            .map_err(|e| format!("写入远程文件[{}]失败: {}", remote_path.display(), e))?;
+        transferred += read_len as u64;
+        progress.emit(
+            "upload",
+            &file_name,
+            transferred,
+            total,
+            file_index,
+            file_total,
+        );
     }
-    if remote_file.write_all(&buffer).is_err() {
-        println!("无法写入远程文件 {}", remote_path.display());
-        return false;
+    let _ = remote_file.flush();
+    progress.emit_force(
+        "upload",
+        &file_name,
+        transferred,
+        total,
+        file_index,
+        file_total,
+    );
+
+    // 保留本地文件修改时间（供【核对程序集】逐文件比对使用），失败静默忽略不影响上传结果
+    if let Ok(metadata) = fs::metadata(local_path) {
+        if let Ok(modified) = metadata.modified() {
+            if let Ok(elapsed) = modified.duration_since(std::time::UNIX_EPOCH) {
+                let secs = elapsed.as_secs();
+                let _ = sftp.setstat(
+                    remote_path,
+                    ssh2::FileStat {
+                        size: None,
+                        uid: None,
+                        gid: None,
+                        perm: None,
+                        atime: Some(secs),
+                        mtime: Some(secs),
+                    },
+                );
+            }
+        }
     }
 
-    true
+    Ok(())
 }
 
 /// 执行本地命令
@@ -1319,6 +1566,7 @@ fn upload_server_file(local_path: &Path, remote_path: &Path, sftp: &ssh2::Sftp) 
 /// * `Err(String)` 失败
 #[tauri::command]
 pub async fn execute_local_command(
+    app: tauri::AppHandle,
     command: &str,
     args: Vec<String>,
     retry_count: Option<u32>,
@@ -1332,13 +1580,25 @@ pub async fn execute_local_command(
     let mut attempts = 0;
     let mut err_msg = String::new();
     while attempts < max_attempts {
+        if let Err(e) = check_cancelled() {
+            return Err(e);
+        }
         match exec_local_command(command, args.clone()).await {
             Ok(output) => return Ok(output),
             Err(e) => {
-                eprintln!("尝试 {} 失败: {}，正在重试...", attempts + 1, e);
                 attempts += 1;
+                emit_retry(
+                    Some(&app),
+                    "本地命令",
+                    attempts,
+                    max_attempts,
+                    attempts < max_attempts,
+                    &e,
+                );
                 if attempts < max_attempts {
-                    thread::sleep(delay);
+                    if !sleep_with_cancel(delay) {
+                        return Err(CANCELLED_MSG.to_string());
+                    }
                 }
                 err_msg = e.to_string();
             }
@@ -1425,6 +1685,7 @@ pub async fn exec_local_command_spawn(command: &str, args: Vec<String>) -> Resul
 /// * `Err(String)` 失败
 #[tauri::command]
 pub async fn execute_local_command_with_working_dir(
+    app: tauri::AppHandle,
     command: &str,
     args: Vec<String>,
     working_dir: &str,
@@ -1432,12 +1693,24 @@ pub async fn execute_local_command_with_working_dir(
     let mut attempts = 0;
     let mut err_msg = String::new();
     while attempts < MAX_RETRIES {
+        if let Err(e) = check_cancelled() {
+            return Err(e);
+        }
         match exec_local_command_with_working_dir(command, args.clone(), working_dir).await {
             Ok(output) => return Ok(output),
             Err(e) => {
-                eprintln!("尝试 {} 失败: {}，正在重试...", attempts + 1, e);
                 attempts += 1;
-                thread::sleep(RETRY_DELAY);
+                emit_retry(
+                    Some(&app),
+                    "本地命令（指定工作目录）",
+                    attempts,
+                    MAX_RETRIES,
+                    attempts < MAX_RETRIES,
+                    &e,
+                );
+                if attempts < MAX_RETRIES && !sleep_with_cancel(RETRY_DELAY) {
+                    return Err(CANCELLED_MSG.to_string());
+                }
                 err_msg = e.to_string();
             }
         }
@@ -1580,6 +1853,37 @@ pub async fn read_dlls_in_date_range(
     }
 
     Ok(dll_files)
+}
+
+/// 读取目录一级下文件的最新修改时间（不递归子目录，与获取程序集取文件口径一致）
+///
+/// # Arguments
+/// * `dir` - 目录路径
+///
+/// # Returns
+/// * `Ok(String)` 最新修改时间（本地时区 `YYYY-mm-dd HH:MM:SS`）；目录不存在或无文件时返回空字符串
+/// * `Err(String)` 失败
+#[tauri::command]
+pub async fn read_latest_mtime(dir: &str) -> Result<String, String> {
+    let mut latest: Option<DateTime<Local>> = None;
+    let entries = fs::read_dir(dir).map_err(|e| e.to_string())?;
+    for entry in entries {
+        // 单个条目读取元数据失败时跳过，不影响整体最新时间统计
+        let Ok(entry) = entry else { continue };
+        let Ok(metadata) = entry.metadata() else { continue };
+        if !metadata.is_file() {
+            continue;
+        }
+        if let Ok(modified) = metadata.modified() {
+            let modified_local: DateTime<Local> = modified.into();
+            if latest.map_or(true, |cur| modified_local > cur) {
+                latest = Some(modified_local);
+            }
+        }
+    }
+    Ok(latest
+        .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
+        .unwrap_or_default())
 }
 
 /// 保存内容到文件

@@ -114,6 +114,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import _ from "lodash";
 import { getDefaultSubObject } from "@/utils/other";
 import { formatDate, DEFAULT_DATE_TIME_START, DEFAULT_DATE_TIME_END } from "@/utils/formatTime";
+import { isCommitSelectModel } from "@/utils/sourceControl";
 import {
   outPublishContents,
   outDetaultPublishContents,
@@ -234,7 +235,8 @@ const onSubmit = async () => {
     console.log('historyParams', historyParams)
 
     // SHA查询
-    if (historyParams.value.historyModel === "commit") {
+    // 用 isCommitSelectModel 兼容界面值「提交」与历史值 "commit"
+    if (isCommitSelectModel(historyParams.value.historyModel)) {
       const startSha = historyParams.value.historyValue[0].value;
       const endSha = historyParams.value.historyValue[1].value;
 

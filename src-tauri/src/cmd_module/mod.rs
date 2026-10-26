@@ -1,4 +1,5 @@
 pub mod auto_start_module;
+pub mod cancel;
 pub mod discovery_module;
 pub mod file_module;
 pub mod parse_sln_module;

@@ -1,7 +1,8 @@
 import { ElLoading } from "element-plus";
 import _ from "lodash";
 import { useAppconfigDb } from "@/database/appconfig/index";
-import { formatDate } from "@/utils/formatTime";
+import { formatDate, getRecentDaysDateRange } from "@/utils/formatTime";
+import { isCommitSelectModel } from "@/utils/sourceControl";
 import { useServerDb } from "@/database/servers/index";
 import { cmdInvoke } from "@/utils/command";
 import { displayOs, removeSlash } from "@/utils/other";
@@ -29,12 +30,24 @@ export const getTfsDllFiles = async (selectTfsItem: SelectTfsType) => {
   execArgs.push(`/collection:${tfsItem.tfsServerUrl}`);
   execArgs.push(`${tfsItem.tfsSourcePath}`);
   execArgs.push("/noprompt");
-  if (selectTfsItem.selectModel === "日期") {
-    const bDate = new Date(selectTfsItem.selectValue[0].value);
+  // [最近时间]按天数动态计算本次的日期范围，其余逻辑与[日期]一致
+  if (selectTfsItem.selectModel === "日期" || selectTfsItem.selectModel === "最近时间") {
+    let beginValue = String(selectTfsItem.selectValue[0].value || "");
+    let endValue = String(selectTfsItem.selectValue[1]?.value || "");
+    if (selectTfsItem.selectModel === "最近时间") {
+      const recentRange = getRecentDaysDateRange(Number(beginValue));
+      if (recentRange.length !== 2) {
+        console.error(`TFS[最近时间]的天数无效：${beginValue || "(空)"}，请填写正整数天数.`);
+        return null;
+      }
+      beginValue = recentRange[0];
+      endValue = recentRange[1];
+    }
+    const bDate = new Date(beginValue);
     const beginDate = formatDate(bDate, "DYYYY-mm-ddTHH:MM:SS");
     let endDate = "";
-    if (selectTfsItem.selectValue[1].value) {
-      const eDate = new Date(selectTfsItem.selectValue[1].value);
+    if (endValue) {
+      const eDate = new Date(endValue);
       endDate = formatDate(eDate, "DYYYY-mm-ddTHH:MM:SS");
     }
     execArgs.push(`-V:${beginDate}~${endDate}`);
@@ -91,12 +104,24 @@ export const getGitDllFiles = async (selectGitItem: SelectGitType) => {
   execArgs.push("--pretty=format:%H|%an|%ae|%ad|%s"); // 格式化输出
   execArgs.push("--name-status"); // 包含文件变更状态
 
-  if (selectGitItem.selectModel === "日期") {
-    const bDate = new Date(selectGitItem.selectValue[0].value);
+  // [最近时间]按天数动态计算本次的日期范围，其余逻辑与[日期]一致
+  if (selectGitItem.selectModel === "日期" || selectGitItem.selectModel === "最近时间") {
+    let beginValue = String(selectGitItem.selectValue[0].value || "");
+    let endValue = String(selectGitItem.selectValue[1]?.value || "");
+    if (selectGitItem.selectModel === "最近时间") {
+      const recentRange = getRecentDaysDateRange(Number(beginValue));
+      if (recentRange.length !== 2) {
+        console.error(`Git[最近时间]的天数无效：${beginValue || "(空)"}，请填写正整数天数.`);
+        return null;
+      }
+      beginValue = recentRange[0];
+      endValue = recentRange[1];
+    }
+    const bDate = new Date(beginValue);
     const beginDate = formatDate(bDate, "YYYY-mm-ddTHH:MM:SS");
     let endDate = "";
-    if (selectGitItem.selectValue[1].value) {
-      const eDate = new Date(selectGitItem.selectValue[1].value);
+    if (endValue) {
+      const eDate = new Date(endValue);
       endDate = formatDate(eDate, "YYYY-mm-ddTHH:MM:SS");
     }
     execArgs.push(`--since=${beginDate}`);
@@ -104,7 +129,8 @@ export const getGitDllFiles = async (selectGitItem: SelectGitType) => {
       execArgs.push(`--until=${endDate}`);
     }
   }
-  if (selectGitItem.selectModel === "commit") {
+  // 用 isCommitSelectModel 兼容界面值「变更集」与历史值 "commit"
+  if (isCommitSelectModel(selectGitItem.selectModel)) {
     const startSha = selectGitItem.selectValue[0].value;
     const endSha = selectGitItem.selectValue[1].value;
     // 如果只填写了起始SHA，则查询从该SHA到HEAD的所有提交（包含起始SHA）

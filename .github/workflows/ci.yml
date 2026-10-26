@@ -193,7 +193,7 @@ jobs:
           tag = ref.rsplit("/", 1)[-1]      # 完整 tag（含 v），Release 下载路径必须带 v，否则链接 404
           version = tag.lstrip("v")
 
-          base = "https://github.com/SIE-Operations-and-Maintenance-Team/publish-tools/releases/download/" + tag
+          base = "https://github.com/nickynull/publish-tools/releases/download/" + tag
 
           nsis_exe = os.path.basename(glob.glob("dist/nsis/*.exe")[0])
           msi_file = os.path.basename(glob.glob("dist/msi/*.msi")[0])

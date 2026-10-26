@@ -4,7 +4,7 @@
 
 // 仓库 GitHub API 地址（与 update.json、安装包下载同源）
 const GITHUB_REPO_API =
-  "https://api.github.com/repos/SIE-Operations-and-Maintenance-Team/publish-tools";
+  "https://api.github.com/repos/nickynull/publish-tools";
 
 /** GitHub Release 接口返回中本工具关心的字段 */
 interface GithubRelease {

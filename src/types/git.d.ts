@@ -13,7 +13,8 @@ declare type gitSelectValueType = {
 declare type SelectGitType = {
 	id: number | null;
 	gitName: string | null;
-	selectModel: "日期" | "commit",
+	// 应用配置界面选项值为「变更集」；"commit" 为历史遗留写法（查询逻辑统一用 isCommitSelectModel 兼容）
+	selectModel: "日期" | "变更集" | "commit" | "最近时间",
 	selectValue: gitSelectValueType[];
 };
 declare type RowGitType = {

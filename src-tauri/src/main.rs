@@ -4,6 +4,7 @@
 use std::process;
 use tauri::Manager;
 use SmomPublish::cmd_module::auto_start_module;
+use SmomPublish::cmd_module::cancel;
 use SmomPublish::cmd_module::discovery_module;
 use SmomPublish::cmd_module::file_module;
 use SmomPublish::cmd_module::parse_sln_module;
@@ -141,7 +142,9 @@ fn main() {
             file_module::copy_non_sie_dlls,
             file_module::copy_dll_files_by_name,
             file_module::read_dlls_by_name,
+            file_module::read_latest_mtime,
             file_module::invalidate_ssh_session,
+            cancel::set_publish_cancel,
             discovery_module::discover_local_services,
             discovery_module::discover_remote_windows_services,
             discovery_module::discover_remote_docker_containers,

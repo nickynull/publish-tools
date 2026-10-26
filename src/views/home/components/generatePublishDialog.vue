@@ -1634,7 +1634,7 @@ defineExpose({
   width: 100%;
   margin: 15px 0px;
   text-align: center;
-  background-color: #fbfbfb;
+  background-color: var(--el-fill-color-lighter);
   padding: 10px;
 }
 
@@ -1652,7 +1652,7 @@ defineExpose({
 
 .form-server-fieldset {
   width: 100%;
-  border: 1px #dcdfe6 solid;
+  border: 1px var(--el-border-color) solid;
   padding-top: 8px;
   padding-left: 10px;
   padding-bottom: 10px;
@@ -1669,7 +1669,7 @@ defineExpose({
   display: block;
   width: 100%;
   margin: 0px 5px;
-  background-color: #fbfbfb;
+  background-color: var(--el-fill-color-lighter);
   height: 32px;
   line-height: 37px;
   cursor: pointer;

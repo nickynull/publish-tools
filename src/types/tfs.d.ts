@@ -15,7 +15,7 @@ declare type tfsSelectValueType = {
 declare type SelectTfsType = {
 	id: number | null;
 	tfsName: string | null;
-	selectModel: "日期" | "变更集",
+	selectModel: "日期" | "变更集" | "最近时间",
 	selectValue: tfsSelectValueType[];
 };
 

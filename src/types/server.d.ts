@@ -25,6 +25,8 @@ declare type RowServerType = {
 	account: string;
 	pwd: string;
 	description: string | null;
+	serviceBackupPath?: string | null;   // 服务备份路径：存放备份文件的目录
+	assemblyStagingPath?: string | null; // 程序集暂存路径：存放将要发布的程序集的目录
 	sourceKey?: string | null;   // SSH MCP 同步来源键（项目/环境/主机），有值=已纳管
 	loading?: boolean | null;
 };

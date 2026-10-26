@@ -101,21 +101,10 @@
           min-width="260"
           show-overflow-tooltip
         />
-        <el-table-column label="操作" width="275" fixed="right">
+        <el-table-column label="操作" width="250" fixed="right">
           <template #default="scope">
             <el-button size="small" text type="success" @click="onCopyServer(scope.row)"
               >复制新增</el-button
-            >
-            <el-button
-              size="small"
-              text
-              type="primary"
-              :loading="scope.row.loading === true"
-              @click="onTestConnect(scope.row)"
-              >{{ !scope.row.loading ? "测试连接" : "连接中" }}</el-button
-            >
-            <el-button size="small" text type="info" @click="onInvokeCommand(scope.row)"
-              >执行命令</el-button
             >
             <el-button
               size="small"
@@ -127,6 +116,45 @@
             <el-button size="small" text type="danger" @click="onRowDel(scope.row)"
               >删除</el-button
             >
+            <el-button size="small" text type="info" @click="onInvokeCommand(scope.row)"
+              >执行命令</el-button
+            >
+            <el-button
+              size="small"
+              text
+              type="primary"
+              :loading="scope.row.loading === true"
+              @click="onTestConnect(scope.row)"
+              >{{ !scope.row.loading ? "测试连接" : "连接中" }}</el-button
+            >
+            <el-dropdown
+              class="log-dropdown"
+              trigger="click"
+              @command="(type: any) => onViewLog(scope.row, type)"
+            >
+              <el-button size="small" text type="primary">查看日志</el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item v-for="opt in logOptions" :key="opt.type" :command="opt.type">
+                    {{ opt.label }}
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+            <el-dropdown
+              class="log-dropdown"
+              trigger="click"
+              @command="(type: any) => onDownloadLog(scope.row, type)"
+            >
+              <el-button size="small" text type="primary">下载日志</el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item v-for="opt in logOptions" :key="opt.type" :command="opt.type">
+                    {{ opt.label }}
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </template>
         </el-table-column>
       </el-table>
@@ -143,6 +171,7 @@
       </el-pagination>
     </el-card>
     <server-dialog ref="serverDialogRef" @refresh="getTableData()" />
+    <server-log-dialog ref="serverLogDialogRef" />
 
     <!-- 服务发现结果抽屉 -->
     <el-drawer
@@ -243,6 +272,15 @@ import _ from "lodash";
 import { useProjectDb } from "@/database/project/index";
 import { useServerDb } from "@/database/servers/index";
 import { displayOs } from "@/utils/other";
+import { save } from "@tauri-apps/plugin-dialog";
+import { formatDate } from "@/utils/formatTime";
+import {
+  SERVER_LOG_OPTIONS,
+  buildLogFileName,
+  buildRemoteLogExistsCommand,
+  resolveServerLogTarget,
+  type ServerLogType,
+} from "@/utils/serverLog";
 import { useServiceDiscovery } from "@/composables/useServiceDiscovery";
 import { syncServersFromSshMcp, getUnmanagedServerCount, type SshMcpSyncResult } from "@/database/servers/sshMcpSync";
 import { loadPublishSettings } from "@/utils/publishSettings";
@@ -256,6 +294,10 @@ const router = useRouter();
 const serverDialogRef = ref();
 const ServerDialog = defineAsyncComponent(
   () => import("@/views/servers/components/serverDialog.vue")
+);
+const serverLogDialogRef = ref();
+const ServerLogDialog = defineAsyncComponent(
+  () => import("@/views/servers/components/serverLogDialog.vue")
 );
 
 // 项目信息
@@ -519,6 +561,85 @@ const onInvokeCommand = (row: RowServerType) => {
     });
 };
 
+// ============ 服务器日志（查看 / 下载） ============
+// 四类操作日志由 STEP 发布流程写入服务器，路径取自服务器的服务备份路径 / 程序集暂存路径
+const logOptions = SERVER_LOG_OPTIONS;
+
+// 查看日志：弹窗展示对应日志最新 100 行
+const onViewLog = (row: RowServerType, type: ServerLogType) => {
+  const target = resolveServerLogTarget(row, type);
+  if (!target.ok) {
+    ElMessage.warning(target.message);
+    return;
+  }
+  serverLogDialogRef.value?.openDialog(row, type);
+};
+
+// 下载日志：选择本地保存路径后通过 SFTP 下载
+const onDownloadLog = async (row: RowServerType, type: ServerLogType) => {
+  const target = resolveServerLogTarget(row, type);
+  if (!target.ok) {
+    ElMessage.warning(target.message);
+    return;
+  }
+
+  // 先探测远端日志是否存在，避免直接走 SFTP 得到难以理解的报错
+  const existsResult = await cmdInvoke<string>("execute_remote_command", {
+    username: row.account,
+    password: row.pwd,
+    server: `${row.ip}:${row.port}`,
+    command: buildRemoteLogExistsCommand(Number(row.os), target.remotePath),
+    // 探测类命令无需重试，避免 3 次等待与重试日志
+    retryCount: 1,
+  });
+  if (existsResult.code !== 0) {
+    ElMessageBox.alert(String(existsResult.data ?? "探测日志文件失败"), "异常", {
+      confirmButtonText: "知道了",
+    });
+    return;
+  }
+  if (String(existsResult.data ?? "").trim() !== "1") {
+    ElMessage.warning(`该服务器暂无${target.option.label}：${target.remotePath}`);
+    return;
+  }
+
+  // 选择保存路径
+  let localPath: string | null = null;
+  try {
+    localPath = await save({
+      defaultPath: buildLogFileName(row.name, type, formatDate(new Date(), "YYYYmmddHHMMSS")),
+      filters: [{ name: "日志文件", extensions: ["log"] }],
+    });
+  } catch (error) {
+    console.error("打开保存对话框失败:", error);
+    ElMessage.error("打开保存对话框失败");
+    return;
+  }
+  if (!localPath) {
+    ElMessage.info("您已取消保存");
+    return;
+  }
+
+  const loading = ElLoading.service({
+    lock: true,
+    text: "正在下载日志，请稍等...",
+    background: "rgba(0, 0, 0, 0)",
+  });
+  const downloadResult = await cmdInvoke("download_server_files", {
+    username: row.account,
+    password: row.pwd,
+    server: `${row.ip}:${row.port}`,
+    remotePaths: [target.remotePath],
+    localPaths: [localPath],
+  });
+  loading.close();
+  if (downloadResult.code !== 0) {
+    ElMessage.error(`${target.option.label}下载失败：${downloadResult.data}`);
+    return;
+  }
+  ElMessage.success(`日志已保存到：${localPath}`);
+};
+
 // 查询项目信息
 const getProjectList = async () => {
   let dataResult = await projectDb.getProjectList({
@@ -760,6 +881,11 @@ onMounted(async () => {
     .el-table {
       flex: 1;
     }
+  }
+  // 表格操作列内的日志下拉按钮：与相邻文字按钮间距对齐 el-button + el-button 的 12px
+  .log-dropdown {
+    margin-left: 12px;
+    vertical-align: middle;
   }
 }
 </style>

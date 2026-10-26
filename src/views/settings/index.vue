@@ -14,6 +14,7 @@
           <el-radio-group v-model="form.startupMenu">
             <el-radio value="workstation">{{ $t('message.settings.startupMenuWorkstation') }}</el-radio>
             <el-radio value="home">{{ $t('message.settings.startupMenuHome') }}</el-radio>
+            <el-radio value="publishStep">{{ $t('message.settings.startupMenuPublishStep') }}</el-radio>
           </el-radio-group>
           <span class="settings-tip">{{ $t('message.settings.startupMenuTip') }}</span>
         </el-form-item>

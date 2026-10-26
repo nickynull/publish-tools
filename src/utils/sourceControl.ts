@@ -25,6 +25,18 @@ export function isPullLatestEnabled(configItems?: ConfigItemsType | null) {
 }
 
 /**
+ * 判断源码管理的筛选模式是否为「变更集/commit」（即按提交号范围查询，而非按日期范围）
+ *
+ * 历史遗留：界面单选项写入的值与查询代码判断的值不一致——
+ * 应用配置里 Git 写的是「变更集」、Git 日志弹窗写的是「提交」，而查询代码判断的是 "commit"，
+ * 导致选中该模式时范围参数不会拼进命令，实际等价于查全量日志。
+ * 这里统一兼容三种写法，避免同一语义在多处各判各的再次对不上。
+ */
+export function isCommitSelectModel(selectModel?: string | null): boolean {
+	return selectModel === "变更集" || selectModel === "commit" || selectModel === "提交";
+}
+
+/**
  * 按应用配置的[获取dll方式]获取最新代码
  * 只支持 TFS / Git，其余方式直接跳过
  */

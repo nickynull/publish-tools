@@ -68,16 +68,32 @@
 			border-color: var(--next-border-color) !important;
 		}
 	}
-	.el-button--primary,
-	.el-button--info,
-	.el-button--danger,
-	.el-button--success,
-	.el-button--warning {
+	// 实心按钮：深底白字。排除 plain 按钮——plain 是浅色底，强制白字会「白字压浅底」看不清
+	.el-button--primary:not(.is-plain),
+	.el-button--info:not(.is-plain),
+	.el-button--danger:not(.is-plain),
+	.el-button--success:not(.is-plain),
+	.el-button--warning:not(.is-plain) {
 		--el-button-text-color: var(--next-color-white) !important;
 		--el-button-hover-text-color: var(--next-color-white) !important;
 		--el-button-disabled-text-color: var(--next-color-white) !important;
 		&:hover {
 			border-color: var(--el-button-hover-border-color, var(--el-button-hover-bg-color)) !important;
+		}
+	}
+	// plain 按钮：深色下改为「透明底 + 语义色文字/边框」，hover 时反白为实心语义色
+	@each $type in (primary, info, danger, success, warning) {
+		.el-button--#{$type}.is-plain {
+			--el-button-text-color: var(--el-color-#{$type}) !important;
+			--el-button-hover-text-color: var(--next-color-white) !important;
+			--el-button-active-text-color: var(--next-color-white) !important;
+			--el-button-disabled-text-color: var(--el-color-#{$type}-light-5) !important;
+			--el-button-bg-color: transparent !important;
+			--el-button-border-color: var(--el-color-#{$type}) !important;
+			--el-button-hover-bg-color: var(--el-color-#{$type}) !important;
+			--el-button-hover-border-color: var(--el-color-#{$type}) !important;
+			--el-button-disabled-bg-color: transparent !important;
+			--el-button-disabled-border-color: var(--el-color-#{$type}-light-5) !important;
 		}
 	}
 

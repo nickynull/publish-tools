@@ -197,7 +197,7 @@ const onLayoutSetingClick = () => {
 const onHandleCommandClick = (path: string) => {
   if (path === "repo") {
     // 打开项目地址（默认浏览器）
-    openUrl("https://github.com/SIE-Operations-and-Maintenance-Team/publish-tools/").catch((e) => {
+    openUrl("https://github.com/nickynull/publish-tools/").catch((e) => {
       ElMessage.error("打开项目地址失败：" + e);
     });
     return;

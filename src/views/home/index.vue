@@ -1,5 +1,5 @@
 <template>
-  <div class="publish-container layout-pd">
+  <div class="publish-container layout-padding">
     <el-row :gutter="15" class="publish-card-box mb15">
       <el-col v-for="(fun, index) in visibleFunModule" :key="fun.title" :class="{
         'publish-media publish-media-lg': fun.origIndex > 1,
@@ -50,7 +50,7 @@
                         state.publishData.appconfigData.id <= 0
                       " -->
                     <el-button size="small" title="生成SMOM发布文件" text @click="onGeneratePublish">
-                      <svg-icon :size="32" color="#606266" title="生成SMOM发布文件" name="smom-icon smom-icon-shengchengqi" />
+                      <svg-icon :size="32" color="var(--el-text-color-regular)" title="生成SMOM发布文件" name="smom-icon smom-icon-shengchengqi" />
                     </el-button>
                     <el-button title="修改应用配置" size="small" text :icon="EditPen" :disabled="state.funModule[currModuleIndex].loading == true ||
                       state.publishData.appconfigData.id == null ||
@@ -594,7 +594,8 @@
         </div>
       </el-col>
     </el-row>
-    <appconfig-dialog ref="appconfigDialogRef" @environment-change="onAppConfigEnvChange" @refresh="getPublishAppconfigs()" />
+    <appconfig-dialog ref="appconfigDialogRef" @environment-change="onAppConfigEnvChange"
+      @project-change="onAppConfigProjectChange" @refresh="getPublishAppconfigs()" />
     <generate-publish-dialog :done="execApplicationAssemblyDone" @exec-application-assembly="onExecApplicationAssembly"
       @exec-done="onExecDone" @refresh="getPublishAppconfigs()" ref="generatePublishDialogRef" />
     <scheduled-publish-dialog ref="scheduledPublishDialogRef" @refresh="getPublishAppconfigs()" />
@@ -630,7 +631,8 @@ import {
   displayOs,
   formatServiceLog,
 } from "@/utils/other";
-import { formatDate } from "@/utils/formatTime";
+import { formatDate, getRecentDaysDateRange } from "@/utils/formatTime";
+import { isCommitSelectModel } from "@/utils/sourceControl";
 import { cmdInvoke } from "@/utils/command";
 import { path } from "@tauri-apps/api";
 import { loadBackupItems } from "@/utils/backupAppconfig";
@@ -3614,12 +3616,24 @@ const getTfsDllFiles = async (selectTfsItem: SelectTfsType) => {
     execArgs.push(`/collection:${tfsItem.tfsServerUrl}`);
     execArgs.push(`${tfsItem.tfsSourcePath}`);
     execArgs.push("/noprompt");
-    if (selectTfsItem.selectModel === "日期") {
-      const bDate = new Date(selectTfsItem.selectValue[0].value);
+    // [最近时间]按天数动态计算本次的日期范围，其余逻辑与[日期]一致
+    if (selectTfsItem.selectModel === "日期" || selectTfsItem.selectModel === "最近时间") {
+      let beginValue = String(selectTfsItem.selectValue[0].value || "");
+      let endValue = String(selectTfsItem.selectValue[1]?.value || "");
+      if (selectTfsItem.selectModel === "最近时间") {
+        const recentRange = getRecentDaysDateRange(Number(beginValue));
+        if (recentRange.length !== 2) {
+          printInfoLog(`TFS[最近时间]的天数无效：${beginValue || "(空)"}，请填写正整数天数.`, "log-error");
+          return null;
+        }
+        beginValue = recentRange[0];
+        endValue = recentRange[1];
+      }
+      const bDate = new Date(beginValue);
       const beginDate = formatDate(bDate, "DYYYY-mm-ddTHH:MM:SS");
       let endDate = "";
-      if (selectTfsItem.selectValue[1].value) {
-        const eDate = new Date(selectTfsItem.selectValue[1].value);
+      if (endValue) {
+        const eDate = new Date(endValue);
         endDate = formatDate(eDate, "DYYYY-mm-ddTHH:MM:SS");
       }
       execArgs.push(`-V:${beginDate}~${endDate}`);
@@ -3716,18 +3730,31 @@ const getGitDllFiles = async (selectGitItem: SelectGitType) => {
     execArgs.push("log");
     execArgs.push("--pretty=format:%H|%an|%ae|%ad|%s"); // 格式化输出
     execArgs.push("--name-status"); // 包含文件变更状态
-    if (selectGitItem.selectModel === "日期") {
-      const bDate = new Date(selectGitItem.selectValue[0].value);
+    // [最近时间]按天数动态计算本次的日期范围，其余逻辑与[日期]一致
+    if (selectGitItem.selectModel === "日期" || selectGitItem.selectModel === "最近时间") {
+      let beginValue = String(selectGitItem.selectValue[0].value || "");
+      let endValue = String(selectGitItem.selectValue[1]?.value || "");
+      if (selectGitItem.selectModel === "最近时间") {
+        const recentRange = getRecentDaysDateRange(Number(beginValue));
+        if (recentRange.length !== 2) {
+          printInfoLog(`Git[最近时间]的天数无效：${beginValue || "(空)"}，请填写正整数天数.`, "log-error");
+          return null;
+        }
+        beginValue = recentRange[0];
+        endValue = recentRange[1];
+      }
+      const bDate = new Date(beginValue);
       const beginDate = formatDate(bDate, "DYYYY-mm-ddTHH:MM:SS");
       let endDate = "";
-      if (selectGitItem.selectValue[1].value) {
-        const eDate = new Date(selectGitItem.selectValue[1].value);
+      if (endValue) {
+        const eDate = new Date(endValue);
         endDate = formatDate(eDate, "DYYYY-mm-ddTHH:MM:SS");
       }
       execArgs.push(`--since=${beginDate}`);
       execArgs.push(`--until=${endDate}`);
     }
-    if (selectGitItem.selectModel === "commit") {
+    // 用 isCommitSelectModel 兼容界面值「变更集」与历史值 "commit"
+    if (isCommitSelectModel(selectGitItem.selectModel)) {
 
       const startSha = selectGitItem.selectValue[0].value;
       const endSha = selectGitItem.selectValue[1].value;
@@ -4000,6 +4027,18 @@ const onAppConfigEnvChange = (newEnv: number) => {
   console.log('  - 已更新 environment:', state.publishData.environment);
 };
 
+// 应用配置弹框项目变更（弹窗内切换项目管理后保存时同步到发布信息）
+const onAppConfigProjectChange = (newProjectId: any) => {
+  const projectId = Number(newProjectId);
+  if (!projectId || projectId === state.publishData.projectId) return;
+  const projectObj = projectList.value?.find((item) => item.id === projectId);
+  if (projectObj) {
+    state.publishData.projectName = String(projectObj.name);
+    state.publishData.assemblyOutPath = projectObj.assemblyOutPath ? String(projectObj.assemblyOutPath) : "";
+  }
+  state.publishData.projectId = projectId;
+};
+
 // 获取发布的应用程序配置
 const getPublishAppconfigs = async () => {
   let dataResult = await appconfigDb.getPublishAppconfigs(
@@ -4049,22 +4088,32 @@ const showDllMode = () => {
     const selectTfsItem = JSON.parse(
       String(state.publishData.appconfigData.dllModeValue)
     ) as SelectTfsType;
-    modelName += `：${selectTfsItem.tfsName}；${selectTfsItem.selectModel}：${selectTfsItem.selectValue[0].value} ~ `;
-    if (selectTfsItem.selectValue[1].value) {
-      modelName += `${selectTfsItem.selectValue[1].value}`;
+    modelName += `：${selectTfsItem.tfsName}；`;
+    if (selectTfsItem.selectModel === "最近时间") {
+      modelName += `最近时间：最近 ${selectTfsItem.selectValue[0].value} 天`;
     } else {
-      modelName += "latest";
+      modelName += `${selectTfsItem.selectModel}：${selectTfsItem.selectValue[0].value} ~ `;
+      if (selectTfsItem.selectValue[1].value) {
+        modelName += `${selectTfsItem.selectValue[1].value}`;
+      } else {
+        modelName += "latest";
+      }
     }
   }
   else if (modelName == "Git") {
     const selectGitItem = JSON.parse(
       String(state.publishData.appconfigData.dllModeValue)
     ) as SelectGitType;
-    modelName += `：${selectGitItem.gitName}；${selectGitItem.selectModel}：${selectGitItem.selectValue[0].value} ~ `;
-    if (selectGitItem.selectValue[1].value) {
-      modelName += `${selectGitItem.selectValue[1].value}`;
+    modelName += `：${selectGitItem.gitName}；`;
+    if (selectGitItem.selectModel === "最近时间") {
+      modelName += `最近时间：最近 ${selectGitItem.selectValue[0].value} 天`;
     } else {
-      modelName += "latest";
+      modelName += `${selectGitItem.selectModel}：${selectGitItem.selectValue[0].value} ~ `;
+      if (selectGitItem.selectValue[1].value) {
+        modelName += `${selectGitItem.selectValue[1].value}`;
+      } else {
+        modelName += "latest";
+      }
     }
   }
   else if (modelName == "DLL名称") {
@@ -4383,8 +4432,13 @@ onActivated(async () => {
 <style scoped lang="scss">
 $homeNavLengh: 8;
 
+// 日志控制台为终端风格：底色与文字固定为一套自洽的配色，不跟随主题变量。
+// （theme/app.scss 的 .log-info 用 --el-bg-color，深色模式下会变成「深底 + 深字」看不清）
+$log-console-bg: #545c64;
+$log-console-text: #ffffff;
+
 .publish-container {
-  height: 100%;
+  // 高度由框架 .layout-padding（absolute + height:100%）提供，天然等于「窗口 - 顶栏 - 页签」，不要写 100vh/100%
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -4404,7 +4458,7 @@ $homeNavLengh: 8;
 
       .card-item-title {
         font-size: 20px;
-        color: #506c88;
+        color: var(--el-text-color-primary);
         text-align: center;
         height: 70px;
         line-height: 70px;
@@ -4414,7 +4468,7 @@ $homeNavLengh: 8;
         padding: 12px 10px 10px 10px;
         height: 45px;
         font-size: 15px;
-        border-bottom: 1px #dfdfdf dashed;
+        border-bottom: 1px var(--el-border-color-light) dashed;
         align-content: flex-end;
 
         .item-btn-box {
@@ -4424,14 +4478,16 @@ $homeNavLengh: 8;
       }
 
       .card-item-content {
-        height: calc(100vh - 308px);
+        // 高度由外层 flex 分配：原为 calc(100vh - 308px)，顶部按钮区换行或窗口高度变化时会算错（溢出或留白）
+        flex: 1 1 auto;
+        min-height: 0;
         overflow-y: auto;
         padding: 10px;
 
         .card-item-env {
           width: 100%;
           text-align: center;
-          background-color: #fbfbfb;
+          background-color: var(--el-fill-color-lighter);
           padding: 10px 0px;
         }
 
@@ -4445,26 +4501,26 @@ $homeNavLengh: 8;
 
             tr {
               th {
-                background-color: #fbfbfb;
+                background-color: var(--el-fill-color-lighter);
                 font-weight: 500;
                 text-align: right;
                 font-size: 14px;
                 width: 110px;
                 padding: 10px 5px;
-                border: 1px solid #eeeeee;
+                border: 1px solid var(--el-border-color-lighter);
               }
 
               td {
                 font-size: 14px;
                 text-align: left;
                 padding: 0px 5px;
-                border: 1px solid #eeeeee;
+                border: 1px solid var(--el-border-color-lighter);
                 word-wrap: break-word;
                 word-break: break-all;
 
                 .t-link-path {
                   text-decoration: none;
-                  color: #303133;
+                  color: var(--el-text-color-primary);
                 }
 
                 .t-link-path:hover {
@@ -4476,7 +4532,7 @@ $homeNavLengh: 8;
 
           .table-appconfig:hover {
             // border: 1px #f56c6c solid;
-            box-shadow: 5px 5px 15px rgba(0, 0, 0, 0.2);
+            box-shadow: 5px 5px 15px var(--next-color-dark-hover);
           }
 
           .table-appconfig-shadow-none {
@@ -4501,15 +4557,23 @@ $homeNavLengh: 8;
         }
       }
 
+      // 日志区自身不滚动（overflow 覆盖 .card-item-content 的 overflow-y），日志超出由内部 .log-tab-pane-content 滚动
       .log-content {
         box-sizing: border-box;
         counter-reset: line-number;
         padding-right: 1em;
         text-align: left;
         overflow: hidden;
+        // 与 .card-item-content 一样自适应剩余高度
+        flex: 1 1 auto;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
 
         .log-tabs {
           height: 100%;
+          flex: 1 1 auto;
+          min-height: 0;
           display: flex;
           flex-direction: column;
 
@@ -4533,9 +4597,24 @@ $homeNavLengh: 8;
           box-sizing: border-box;
           height: 100%;
           overflow-y: auto;
-          background-color: #545c64;
+          background-color: $log-console-bg;
+          color: $log-console-text;
           padding: 8px 1em 8px 8px;
           text-align: left;
+
+          // 日志行配色固定（终端风格），覆盖 theme/app.scss 中跟随主题的 .log-* 定义
+          .log-info {
+            color: $log-console-text;
+          }
+          .log-warning {
+            color: var(--el-color-warning);
+          }
+          .log-error {
+            color: var(--el-color-danger);
+          }
+          .log-success {
+            color: var(--el-color-success);
+          }
         }
       }
     }
@@ -4551,6 +4630,10 @@ $homeNavLengh: 8;
   }
 
   .publish-card-box {
+    // 顶部功能按钮区：按自身内容高度占位，不参与高度伸缩；窗口变窄时换行，下方内容区随之收缩并在内部滚动
+    flex: 0 0 auto;
+    row-gap: 15px;
+
     .publish-card-item {
       padding: 10px 12px;
       cursor: pointer;
@@ -4588,6 +4671,8 @@ $homeNavLengh: 8;
     .publish-fun-col {
       flex: 1 1 0%;
       max-width: none;
+      // 宽度不足时换行，避免卡片被压到看不清标题
+      min-width: 116px;
     }
 
     @for $i from 0 through 3 {
@@ -4602,8 +4687,17 @@ $homeNavLengh: 8;
   }
 
   .publish-card-config {
-    flex: 1;
+    flex: 1 1 auto;
     min-height: 0;
+
+    // el-row 是 flex-wrap:wrap 的 flex 容器，flex 行高由列内容高度决定（可超出行本身），
+    // 不钉住列高的话卡片会随内容长高、整列溢出被裁掉而不出滚动条。
+    // 列高 100% 钉在本行的确定高度上，卡片才能拿到固定高度并让 .card-item-content 内部滚动
+    @media (min-width: 768px) {
+      > .el-col {
+        height: 100%;
+      }
+    }
 
     .publish-card-item {
       height: 100%;
@@ -4631,12 +4725,12 @@ $homeNavLengh: 8;
   }
 
   .t-border-none {
-    border: 0px solid white !important;
+    border: 0px solid transparent !important;
   }
 
   .t-link-path {
     text-decoration: none;
-    color: #409eff;
+    color: var(--el-color-primary);
   }
 
   .t-link-path:hover {

@@ -8,7 +8,7 @@ export function useServerDb() {
          * @returns { any }
          */
         getServerList: async (params: GetServerTableParams) => {
-            let dataSql = "select ts.id, ts.project_id projectId, tp.name projectName, ts.name, ts.os, ts.ip, ts.port, ts.account, ts.pwd, ts.description from t_server ts left join t_project tp on ts.project_id = tp.id";
+            let dataSql = "select ts.id, ts.project_id projectId, tp.name projectName, ts.name, ts.os, ts.ip, ts.port, ts.account, ts.pwd, ts.description, ts.service_backup_path serviceBackupPath, ts.assembly_staging_path assemblyStagingPath from t_server ts left join t_project tp on ts.project_id = tp.id";
             let totalSql = "select count(*) totalCount from t_server ts";
             let where = " where 1=1 ";
             let orderBy = "";
@@ -54,7 +54,7 @@ export function useServerDb() {
          * @returns { any }
          */
         getServerById: async (id: number) => {
-            let dataSql = "select ts.id, ts.project_id projectId, tp.name projectName, ts.name, ts.os, ts.ip, ts.port, ts.account, ts.pwd, ts.description from t_server ts left join t_project tp on ts.project_id = tp.id where ts.id = $1";
+            let dataSql = "select ts.id, ts.project_id projectId, tp.name projectName, ts.name, ts.os, ts.ip, ts.port, ts.account, ts.pwd, ts.description, ts.service_backup_path serviceBackupPath, ts.assembly_staging_path assemblyStagingPath from t_server ts left join t_project tp on ts.project_id = tp.id where ts.id = $1";
 
             // 定义(默认)响应结果
             let dataResult: DataResultType<TableResultType<RowServerType>> = {
@@ -85,7 +85,7 @@ export function useServerDb() {
          * @param server 服务器
          */
         insertServer: async (server: RowServerType) => {
-            let insertSql = "INSERT INTO t_server (project_id, name, os, ip, port, account, pwd, description) VALUES($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id;";
+            let insertSql = "INSERT INTO t_server (project_id, name, os, ip, port, account, pwd, description, service_backup_path, assembly_staging_path) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id;";
 
             // 定义(默认)响应结果
             let dataResult: DataResultType<number> = {
@@ -107,7 +107,7 @@ export function useServerDb() {
                     return dataResult;
                 }
 
-                let rowResult = await (await db()).execute(insertSql, [server.projectId, server.name, server.os, server.ip, server.port, server.account, server.pwd, server.description]);
+                let rowResult = await (await db()).execute(insertSql, [server.projectId, server.name, server.os, server.ip, server.port, server.account, server.pwd, server.description, server.serviceBackupPath ?? null, server.assemblyStagingPath ?? null]);
                 if (rowResult.lastInsertId && rowResult.lastInsertId > 0) {
                     dataResult.code = 0;
                     dataResult.data = rowResult.lastInsertId;
@@ -129,7 +129,7 @@ export function useServerDb() {
          * @param server 服务器
          */
         updateServer: async (server: RowServerType) => {
-            let updateSql = "UPDATE t_server SET project_id=$1, name=$2, os=$3, ip=$4, port=$5, account=$6, pwd=$7, description=$8 WHERE id=$9;";
+            let updateSql = "UPDATE t_server SET project_id=$1, name=$2, os=$3, ip=$4, port=$5, account=$6, pwd=$7, description=$8, service_backup_path=$9, assembly_staging_path=$10 WHERE id=$11;";
 
             // 定义(默认)响应结果
             let dataResult: DataResultType<boolean> = {
@@ -151,7 +151,7 @@ export function useServerDb() {
                     return dataResult;
                 }
 
-                let rowResult = await (await db()).execute(updateSql, [server.projectId, server.name, server.os, server.ip, server.port, server.account, server.pwd, server.description, server.id]);
+                let rowResult = await (await db()).execute(updateSql, [server.projectId, server.name, server.os, server.ip, server.port, server.account, server.pwd, server.description, server.serviceBackupPath ?? null, server.assemblyStagingPath ?? null, server.id]);
                 if (rowResult.rowsAffected > 0) {
                     dataResult.code = 0;
                     dataResult.data = true;

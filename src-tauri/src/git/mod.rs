@@ -1,7 +1,7 @@
+use crate::cmd_module::cancel::{check_cancelled, sleep_with_cancel, CANCELLED_MSG};
 use encoding_rs::GBK;
 use std::io::ErrorKind;
 use std::process::Command;
-use std::thread;
 use std::time::Duration;
 
 // 添加Windows平台特定的trait导入
@@ -23,30 +23,55 @@ const RETRY_DELAY: Duration = Duration::from_millis(500);
 /// * `Err(String)` 失败
 #[tauri::command]
 pub async fn execute_git_command(
+    app: tauri::AppHandle,
     command: &str,
     args: Vec<String>,
     cwd: &str,
 ) -> Result<CommandResult, String> {
-    execute_git_command_internal(command, args, cwd).await
+    execute_git_command_internal(command, args, cwd, Some(&app)).await
 }
 
 pub async fn execute_git_command_internal(
     command: &str,
     args: Vec<String>,
     cwd: &str,
+    app: Option<&tauri::AppHandle>,
 ) -> Result<CommandResult, String> {
     let mut attempts = 0;
     let mut err_msg = String::new();
 
     while attempts < MAX_RETRIES {
+        if let Err(e) = check_cancelled() {
+            return Err(e);
+        }
         match exec_git_command(command, args.clone(), cwd) {
             // 移除 .await
             Ok(result) => return Ok(result),
             Err(e) => {
-                eprintln!("Git命令尝试 {} 失败: {}，正在重试...", attempts + 1, e);
                 attempts += 1;
+                // 推送重试事件到前端日志（前端未监听时 emit 失败可忽略）
                 if attempts < MAX_RETRIES {
-                    thread::sleep(RETRY_DELAY);
+                    eprintln!("Git命令尝试 {} 失败: {}，正在重试...", attempts, e);
+                } else {
+                    eprintln!("Git命令尝试 {} 失败: {}，已达最大次数.", attempts, e);
+                }
+                if let Some(app) = app {
+                    use tauri::Emitter;
+                    let _ = app.emit(
+                        "backend-retry",
+                        serde_json::json!({
+                            "source": "Git命令",
+                            "attempt": attempts,
+                            "total": MAX_RETRIES,
+                            "willRetry": attempts < MAX_RETRIES,
+                            "message": e,
+                        }),
+                    );
+                }
+                if attempts < MAX_RETRIES {
+                    if !sleep_with_cancel(RETRY_DELAY) {
+                        return Err(CANCELLED_MSG.to_string());
+                    }
                 }
                 err_msg = e;
             }
@@ -120,7 +145,7 @@ fn exec_git_command(command: &str, args: Vec<String>, cwd: &str) -> Result<Comma
 pub async fn get_git_branches(command: &str, cwd: &str) -> Result<Vec<String>, String> {
     let args = vec!["branch".to_string(), "-a".to_string()];
 
-    let result = execute_git_command_internal(command, args, cwd).await?;
+    let result = execute_git_command_internal(command, args, cwd, None).await?;
 
     if result.code != 0 {
         return Err(result.data);
@@ -149,7 +174,7 @@ pub async fn get_git_branches(command: &str, cwd: &str) -> Result<Vec<String>, S
 pub async fn get_git_status(command: &str, cwd: &str) -> Result<String, String> {
     let args = vec!["status".to_string()];
 
-    let result = execute_git_command_internal(command, args, cwd).await?;
+    let result = execute_git_command_internal(command, args, cwd, None).await?;
 
     if result.code != 0 {
         return Err(result.data);
@@ -170,7 +195,7 @@ pub async fn get_git_status(command: &str, cwd: &str) -> Result<String, String> 
 /// * `Err(String)` 失败
 #[tauri::command]
 pub async fn get_git_log(command: &str, args: Vec<String>, cwd: &str) -> Result<String, String> {
-    let result = execute_git_command_internal(command, args, cwd).await?;
+    let result = execute_git_command_internal(command, args, cwd, None).await?;
 
     if result.code != 0 {
         return Err(result.data);
@@ -193,7 +218,7 @@ pub async fn get_git_log(command: &str, args: Vec<String>, cwd: &str) -> Result<
 pub async fn get_git_show(command: &str, commit_hash: &str, cwd: &str) -> Result<String, String> {
     let args = vec!["show".to_string(), commit_hash.to_string()];
 
-    let result = execute_git_command_internal(command, args, cwd).await?;
+    let result = execute_git_command_internal(command, args, cwd, None).await?;
 
     if result.code != 0 {
         return Err(result.data);
@@ -226,7 +251,7 @@ pub async fn git_commit(
         args.insert(1, "--all".to_string());
     }
 
-    let result = execute_git_command_internal(command, args, cwd).await?;
+    let result = execute_git_command_internal(command, args, cwd, None).await?;
 
     if result.code != 0 {
         return Err(result.data);
@@ -255,7 +280,7 @@ pub async fn git_add(command: &str, files: Vec<String>, cwd: &str) -> Result<Str
         args.extend(files);
     }
 
-    let result = execute_git_command_internal(command, args, cwd).await?;
+    let result = execute_git_command_internal(command, args, cwd, None).await?;
 
     if result.code != 0 {
         return Err(result.data);

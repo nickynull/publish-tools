@@ -1,7 +1,7 @@
 <template>
   <div class="appconfig-container">
     <el-dialog v-model="state.dialog.show" :title="state.dialog.title" :close-on-click-modal="false"
-      modal-class="appconfig-dialog" draggable width="680px">
+      modal-class="appconfig-dialog" draggable width="1080px">
       <el-form ref="appconfigDialogFormRef" size="default" label-width="100px" :model="state.ruleForm"
         :rules="formRules" :disabled="formDisabled">
         <el-row :gutter="10">
@@ -87,6 +87,7 @@
               <el-radio-group v-model="selectTfsItem.selectModel" @change="onSelectTfsModelChange">
                 <el-radio-button label="日期" value="日期" />
                 <el-radio-button label="变更集" value="变更集" />
+                <el-radio-button label="最近时间" value="最近时间" />
               </el-radio-group>
             </el-col>
             <el-col :span="8" class="mb10">
@@ -95,16 +96,24 @@
                   v-model="selectTfsItem.selectValue[0].value" type="datetime"
                   :default-time="DEFAULT_DATE_TIME_START"
                   :placeholder="selectTfsItem.selectValue[0].placeholder" />
+                <el-input v-else-if="selectTfsItem.selectModel === '最近时间'"
+                  v-model="selectTfsItem.selectValue[0].value"
+                  :placeholder="selectTfsItem.selectValue[0].placeholder" maxlength="4" clearable>
+                  <template #append>天</template>
+                </el-input>
                 <el-input v-else v-model="selectTfsItem.selectValue[0].value"
                   :placeholder="selectTfsItem.selectValue[0].placeholder" maxlength="150" clearable></el-input>
               </el-form-item>
             </el-col>
-            <el-col :span="1" class="mb10">
+            <el-col :span="1" class="mb10" v-if="selectTfsItem.selectModel !== '最近时间'">
               <div class="range-separator">~</div>
             </el-col>
             <el-col :span="9" class="mb10">
               <el-form-item label-width="0px">
-                <el-date-picker class="w100" v-if="selectTfsItem.selectModel === '日期'"
+                <div v-if="selectTfsItem.selectModel === '最近时间'" class="recent-days-tip">
+                  结束为今天 23:59:59，每次获取时按天数动态计算
+                </div>
+                <el-date-picker v-else-if="selectTfsItem.selectModel === '日期'" class="w100"
                   v-model="selectTfsItem.selectValue[1].value" type="datetime"
                   :default-time="DEFAULT_DATE_TIME_END"
                   :placeholder="selectTfsItem.selectValue[1].placeholder" />
@@ -119,6 +128,7 @@
               <el-radio-group v-model="selectGitItem.selectModel" @change="onSelectGitModelChange">
                 <el-radio-button label="日期" value="日期" />
                 <el-radio-button label="变更集" value="变更集" />
+                <el-radio-button label="最近时间" value="最近时间" />
               </el-radio-group>
             </el-col>
             <el-col :span="8" class="mb10">
@@ -127,16 +137,24 @@
                   v-model="selectGitItem.selectValue[0].value" type="datetime"
                   :default-time="DEFAULT_DATE_TIME_START"
                   :placeholder="selectGitItem.selectValue[0].placeholder" />
+                <el-input v-else-if="selectGitItem.selectModel === '最近时间'"
+                  v-model="selectGitItem.selectValue[0].value"
+                  :placeholder="selectGitItem.selectValue[0].placeholder" maxlength="4" clearable>
+                  <template #append>天</template>
+                </el-input>
                 <el-input v-else v-model="selectGitItem.selectValue[0].value"
                   :placeholder="selectGitItem.selectValue[0].placeholder" maxlength="150" clearable></el-input>
               </el-form-item>
             </el-col>
-            <el-col :span="1" class="mb10">
+            <el-col :span="1" class="mb10" v-if="selectGitItem.selectModel !== '最近时间'">
               <div class="range-separator">~</div>
             </el-col>
             <el-col :span="9" class="mb10">
               <el-form-item label-width="0px">
-                <el-date-picker class="w100" v-if="selectGitItem.selectModel === '日期'"
+                <div v-if="selectGitItem.selectModel === '最近时间'" class="recent-days-tip">
+                  结束为今天 23:59:59，每次获取时按天数动态计算
+                </div>
+                <el-date-picker v-else-if="selectGitItem.selectModel === '日期'" class="w100"
                   v-model="selectGitItem.selectValue[1].value" type="datetime"
                   :default-time="DEFAULT_DATE_TIME_END"
                   :placeholder="selectGitItem.selectValue[1].placeholder" />
@@ -537,10 +555,11 @@ import { useServerDb } from "@/database/servers/index";
 import { useTfsDb } from "@/database/teamFoundationServer/index";
 import { useGitDb } from "@/database/git/index";
 import { formatDate, DEFAULT_DATE_TIME_START, DEFAULT_DATE_TIME_END } from "@/utils/formatTime";
+import { isCommitSelectModel } from "@/utils/sourceControl";
 import { getDefaultSubObject, removeSlash } from "@/utils/other";
 
 // 定义子组件向父组件传值/事件
-const emit = defineEmits(["refresh", "environment-change"]);
+const emit = defineEmits(["refresh", "environment-change", "project-change"]);
 
 // 引入应用配置管理数据库
 const appconfigDb = useAppconfigDb();
@@ -723,15 +742,31 @@ const onSlnFileChange = async () => {
   return true;
 };
 
-// 项目管理切换监听
+// 项目管理切换监听：加载该项目在当前环境下的已有配置；没有则切换为全新配置表单
 const onProjectChange = async (val: number) => {
-  getServerList(val);
-  state.ruleForm.configItems.webApiHost.serverIds = [];
-  state.ruleForm.configItems.webApiHost.serverArr = [];
-  state.ruleForm.configItems.webClient.serverIds = [];
-  state.ruleForm.configItems.webClient.serverArr = [];
-  state.ruleForm.configItems.spcMonitor.serverIds = [];
-  state.ruleForm.configItems.spcMonitor.serverArr = [];
+  const projectId = Number(val);
+  await getServerList(projectId);
+  const prevEnvironment = state.ruleForm.environment || 1;
+  const result = await appconfigDb.getPublishAppconfigs(projectId, prevEnvironment);
+  formReset();
+  state.ruleForm.projectId = projectId;
+  state.ruleForm.environment = prevEnvironment || 1;
+  if (result.code === 0 && result.data.data && result.data.data.id) {
+    // 已有配置：加载并切换为编辑态
+    const data = result.data.data;
+    loadAppconfigToForm(data);
+    state.dialog.type = "edit";
+    state.dialog.editId = data.id;
+    state.dialog.title = `${formDisabled.value ? "查看" : "修改"}应用配置`;
+    state.dialog.submitTxt = formDisabled.value ? "确 定" : "修 改";
+  } else {
+    // 无配置：全新表单（新增态）
+    state.dialog.type = "add";
+    state.dialog.editId = null;
+    state.dialog.title = `${formDisabled.value ? "查看" : "新增"}应用配置`;
+    state.dialog.submitTxt = formDisabled.value ? "确 定" : "新 增";
+  }
+  appconfigDialogFormRef.value?.clearValidate();
 };
 
 // 是否 10.2+ 版本切换
@@ -1147,7 +1182,7 @@ const onGitChange = async (val: number) => {
 };
 
 // TFS模式切换
-const onSelectTfsModelChange = (val: "日期" | "变更集") => {
+const onSelectTfsModelChange = (val: "日期" | "变更集" | "最近时间") => {
   selectTfsItem.value.selectModel = val;
   if (val === "日期") {
     selectTfsItem.value.selectValue = [
@@ -1157,6 +1192,17 @@ const onSelectTfsModelChange = (val: "日期" | "变更集") => {
       },
       {
         placeholder: "日期结束(选填，空为最新)",
+        value: "",
+      },
+    ];
+  } else if (val === "最近时间") {
+    selectTfsItem.value.selectValue = [
+      {
+        placeholder: "最近天数(必填，如 3 表示最近3天)",
+        value: "",
+      },
+      {
+        placeholder: "(自动计算，无需填写)",
         value: "",
       },
     ];
@@ -1174,7 +1220,7 @@ const onSelectTfsModelChange = (val: "日期" | "变更集") => {
   }
 };
 
-const onSelectGitModelChange = (val: "日期" | "commit") => {
+const onSelectGitModelChange = (val: "日期" | "变更集" | "commit" | "最近时间") => {
   selectGitItem.value.selectModel = val;
   if (val === "日期") {
     selectGitItem.value.selectValue = [
@@ -1184,6 +1230,17 @@ const onSelectGitModelChange = (val: "日期" | "commit") => {
       },
       {
         placeholder: "日期结束(选填，空为最新)",
+        value: "",
+      },
+    ];
+  } else if (val === "最近时间") {
+    selectGitItem.value.selectValue = [
+      {
+        placeholder: "最近天数(必填，如 3 表示最近3天)",
+        value: "",
+      },
+      {
+        placeholder: "(自动计算，无需填写)",
         value: "",
       },
     ];
@@ -1213,6 +1270,23 @@ const formRules = reactive<FormRules>({
           callback(new Error("请选择日期范围！"));
         } else if (!dllModeValue && state.ruleForm.dllMode === "DLL名称") {
           callback(new Error("请输入DLL名称！"));
+        } else if (state.ruleForm.dllMode === "TFS" || state.ruleForm.dllMode === "Git") {
+          // TFS/Git 的[最近时间]模式：天数为必填正整数
+          let daysValid = true;
+          try {
+            const selectItem = JSON.parse(String(dllModeValue || "{}"));
+            if (selectItem && selectItem.selectModel === "最近时间") {
+              const days = Number(selectItem.selectValue ? selectItem.selectValue[0]?.value : "");
+              daysValid = Number.isInteger(days) && days >= 1 && days <= 3650;
+            }
+          } catch (error) {
+            daysValid = false;
+          }
+          if (!daysValid) {
+            callback(new Error("请输入最近天数（正整数，如 3 表示最近3天）！"));
+          } else {
+            callback();
+          }
         } else {
           callback();
         }
@@ -1292,6 +1366,45 @@ const formReset = () => {
   };
 };
 
+// 将应用配置记录加载到表单（打开弹窗编辑态 与 弹窗内切换项目管理 共用）
+const loadAppconfigToForm = (row: RowAppconfigType) => {
+  Object.assign(state.ruleForm, row);
+  normalizeWpfClientServer(state.ruleForm.configItems.wpfClient);
+  // 存量配置没有[拉取最新代码]开关时按开启处理
+  if (state.ruleForm.configItems.isPullLatest === null || state.ruleForm.configItems.isPullLatest === undefined) {
+    state.ruleForm.configItems.isPullLatest = 1;
+  }
+  if (state.ruleForm.configItems.wpfClient.generateDirJson) {
+    generateDirs.value = JSON.parse(
+      state.ruleForm.configItems.wpfClient.generateDirJson
+    );
+  }
+  if (state.ruleForm.configItems.wpfClient.compressFileJson) {
+    compressFiles.value = JSON.parse(
+      state.ruleForm.configItems.wpfClient.compressFileJson
+    );
+  }
+
+  if (state.ruleForm.dllModeValue && state.ruleForm.dllMode == "日期范围") {
+    let dateJson = JSON.parse(state.ruleForm.dllModeValue);
+    let beginDate = new Date(dateJson[0]);
+    let endDate = new Date(dateJson[1]);
+    dllModeDate.value = [beginDate, endDate];
+  }
+
+  if (state.ruleForm.dllModeValue && state.ruleForm.dllMode == "TFS") {
+    selectTfsItem.value = JSON.parse(state.ruleForm.dllModeValue);
+  }
+
+  if (state.ruleForm.dllModeValue && state.ruleForm.dllMode == "Git") {
+    selectGitItem.value = JSON.parse(state.ruleForm.dllModeValue);
+    // 兼容历史数据：早期该模式可能被写成 "commit"，统一成界面选项值「变更集」，否则单选组无法回显
+    if (isCommitSelectModel(selectGitItem.value.selectModel)) {
+      selectGitItem.value.selectModel = "变更集";
+    }
+  }
+};
+
 // 打开弹窗
 const openDialog = async (type: string, row: RowAppconfigType | undefined) => {
   /* Start: 重置表单内容 */
@@ -1305,37 +1418,7 @@ const openDialog = async (type: string, row: RowAppconfigType | undefined) => {
     if (type === "edit" || type === "viewer") {
       state.dialog.type = "edit";
       state.dialog.editId = row?.id;
-      Object.assign(state.ruleForm, row);
-      normalizeWpfClientServer(state.ruleForm.configItems.wpfClient);
-      // 存量配置没有[拉取最新代码]开关时按开启处理
-      if (state.ruleForm.configItems.isPullLatest === null || state.ruleForm.configItems.isPullLatest === undefined) {
-        state.ruleForm.configItems.isPullLatest = 1;
-      }
-      if (state.ruleForm.configItems.wpfClient.generateDirJson) {
-        generateDirs.value = JSON.parse(
-          state.ruleForm.configItems.wpfClient.generateDirJson
-        );
-      }
-      if (state.ruleForm.configItems.wpfClient.compressFileJson) {
-        compressFiles.value = JSON.parse(
-          state.ruleForm.configItems.wpfClient.compressFileJson
-        );
-      }
-
-      if (state.ruleForm.dllModeValue && state.ruleForm.dllMode == "日期范围") {
-        let dateJson = JSON.parse(state.ruleForm.dllModeValue);
-        let beginDate = new Date(dateJson[0]);
-        let endDate = new Date(dateJson[1]);
-        dllModeDate.value = [beginDate, endDate];
-      }
-
-      if (state.ruleForm.dllModeValue && state.ruleForm.dllMode == "TFS") {
-        selectTfsItem.value = JSON.parse(state.ruleForm.dllModeValue);
-      }
-
-      if (state.ruleForm.dllModeValue && state.ruleForm.dllMode == "Git") {
-        selectGitItem.value = JSON.parse(state.ruleForm.dllModeValue);
-      }
+      loadAppconfigToForm(row as RowAppconfigType);
 
       appconfigDialogFormRef.value?.clearValidate();
 
@@ -1416,6 +1499,8 @@ const onSubmit = async () => {
       console.log('=== appconfigDialog 保存成功 ===');
       console.log('  - state.ruleForm.environment:', state.ruleForm.environment);
       closeDialog(); // 关闭弹窗
+      // 先通知项目变更（弹窗内可能切换了项目管理），再通知环境变更，最后刷新配置
+      emit("project-change", state.ruleForm.projectId);
       emit("environment-change", state.ruleForm.environment);
       emit("refresh");
     } else {
@@ -1429,6 +1514,8 @@ const onSubmit = async () => {
   if (insertResult.code === 0) {
     ElMessage.success("添加成功！");
     closeDialog(); // 关闭弹窗
+    // 先通知项目变更（弹窗内可能切换了项目管理），再通知环境变更，最后刷新配置
+    emit("project-change", state.ruleForm.projectId);
     emit("environment-change", state.ruleForm.environment);
     emit("refresh");
   } else {
@@ -1593,5 +1680,15 @@ defineExpose({
   text-align: center;
   height: 32px;
   line-height: 32px;
+}
+
+.recent-days-tip {
+  height: 32px;
+  line-height: 32px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 </style>

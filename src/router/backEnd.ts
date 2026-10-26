@@ -39,7 +39,8 @@ export async function initBackEndControlRoutes() {
 
 	// 启动默认菜单：按 t_settings.startup_menu 改写根路由重定向，仅空/非法值一律回退发布工作台
 	const { startupMenu } = await loadPublishSettings();
-	dynamicRoutes[0].redirect = startupMenu === 'home' ? '/home' : '/workstation';
+	dynamicRoutes[0].redirect =
+		startupMenu === 'home' ? '/home' : startupMenu === 'publishStep' ? '/publishStep' : '/workstation';
 
 	// 添加动态路由
 	await setAddRoute();

@@ -170,6 +170,8 @@ declare type UploadFileNumberType = {
 	currNumber: number;
 	totalNumber: number;
 	prefix?: string;
+	// 进度补充文本（如"Plugins.zip 62%（38.4 MB / 62.1 MB）"），由后端进度事件写入
+	progressText?: string;
 };
 
 // 发布信息类型

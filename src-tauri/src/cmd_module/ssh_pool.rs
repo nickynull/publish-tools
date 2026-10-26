@@ -26,6 +26,10 @@ pub struct PooledSession {
 
 pub type SharedSession = Arc<Mutex<PooledSession>>;
 
+/// TCP 建连超时：连接不上立即报错，避免系统级 TCP 超时（可达 20s+）造成无意义等待
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// SSH 握手/认证/读写超时
+const SESSION_TIMEOUT: Duration = Duration::from_secs(30);
 /// 空闲超时：超过该时间未使用则丢弃重建（避免长时间挂起的死连接）
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 /// keepalive 心跳间隔（秒）
@@ -81,9 +85,18 @@ pub fn get_session(username: &str, password: &str, server: &str) -> Result<Share
     }
 
     // 2. 创建新会话
-    let tcp = TcpStream::connect(server).map_err(|e| format!("无法连接到服务器: {}", e))?;
+    // server 形如 "ip:port"；解析成功用带超时建连（连不上 5s 内立即报错），
+    // 解析失败（如直接传主机名）回退到原始 connect 保持兼容
+    let tcp = match server.parse::<std::net::SocketAddr>() {
+        Ok(addr) => TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT),
+        Err(_) => TcpStream::connect(server),
+    }
+    .map_err(|e| format!("无法连接到服务器: {}", e))?;
+    tcp.set_nodelay(true).ok();
     let mut sess = Session::new().map_err(|e| format!("无法创建 SSH 会话: {}", e))?;
     sess.set_tcp_stream(tcp);
+    // 握手/认证/后续读写统一超时，避免服务器无响应时无限挂起
+    sess.set_timeout(SESSION_TIMEOUT.as_millis() as u32);
     sess.handshake()
         .map_err(|e| format!("SSH 握手失败: {}", e))?;
     sess.userauth_password(username, password)

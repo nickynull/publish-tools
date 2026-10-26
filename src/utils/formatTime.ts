@@ -194,3 +194,20 @@ export function formatGitDate(gitDate: string, format: string = "YYYY-mm-dd HH:M
  */
 export const DEFAULT_DATE_TIME_START = new Date(2000, 0, 1, 0, 0, 0);
 export const DEFAULT_DATE_TIME_END = new Date(2000, 0, 1, 23, 59, 59);
+
+/**
+ * 按天数计算「最近N天」的日期范围（供 TFS/Git 获取方式的[最近时间]模式动态计算范围）
+ * 口径与既有 dllMode「最近3天」一致：起始 = 今天往前推 N 天的 00:00:00，结束 = 今天 23:59:59
+ * @param days 天数（正整数，最大 3650）
+ * @returns [起始, 结束]（YYYY-mm-dd HH:MM:SS）；天数非法时返回空数组
+ */
+export function getRecentDaysDateRange(days: number): string[] {
+	const dayCount = Number(days);
+	if (!Number.isInteger(dayCount) || dayCount < 1 || dayCount > 3650) return [];
+	const now = new Date();
+	const begin = new Date(now.getTime() - dayCount * 24 * 60 * 60 * 1000);
+	return [
+		formatDate(begin, "YYYY-mm-dd 00:00:00"),
+		formatDate(now, "YYYY-mm-dd 23:59:59"),
+	];
+}

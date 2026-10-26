@@ -168,6 +168,20 @@ pub fn db_migration() -> Vec<Migration> {
             kind: MigrationKind::Up,
         },
         Migration { version: 10, description: "创建服务发现前缀表[t_discovery_prefix].", sql: t_discovery_prefix, kind: MigrationKind::Up, },
+        // 项目发布STEP：服务器表增加服务备份路径
+        Migration {
+            version: 11,
+            description: "服务器[t_server]表增加服务备份路径列[service_backup_path].",
+            sql: "ALTER TABLE t_server ADD COLUMN service_backup_path TEXT;",
+            kind: MigrationKind::Up,
+        },
+        // 项目发布STEP：服务器表增加程序集暂存路径
+        Migration {
+            version: 12,
+            description: "服务器[t_server]表增加程序集暂存路径列[assembly_staging_path].",
+            sql: "ALTER TABLE t_server ADD COLUMN assembly_staging_path TEXT;",
+            kind: MigrationKind::Up,
+        },
     ];
     migrations
 }

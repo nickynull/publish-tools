@@ -79,6 +79,22 @@ export const dynamicRoutes: Array<RouteRecordRaw> = [
 				children: []
 			},
 			{
+				path: '/publishStep',
+				name: 'publishStep',
+				component: () => import('@/views/publishStep/index.vue'),
+				meta: {
+					title: 'message.router.publishStep',
+					isLink: '',
+					isHide: false,
+					isKeepAlive: true,
+					isAffix: false,
+					isIframe: false,
+					icon: 'smom-icon smom-icon-fabu'
+				},
+				redirect: "",
+				children: []
+			},
+			{
 				path: '/smom',
 				name: 'smom',
 				component: () => import("@/layout/routerView/parent.vue"),
@@ -213,6 +229,22 @@ export const dynamicRoutes: Array<RouteRecordRaw> = [
 					isAffix: false,
 					isIframe: false,
 					icon: 'ele-Setting'
+				},
+				redirect: "",
+				children: []
+			},
+			{
+				path: '/icons',
+				name: 'icons',
+				component: () => import('@/views/icons/index.vue'),
+				meta: {
+					title: 'message.router.icons',
+					isLink: '',
+					isHide: false,
+					isKeepAlive: true,
+					isAffix: false,
+					isIframe: false,
+					icon: 'ele-MagicStick'
 				},
 				redirect: "",
 				children: []

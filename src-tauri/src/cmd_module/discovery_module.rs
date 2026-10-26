@@ -271,6 +271,7 @@ struct RemoteWinServiceRaw {
 /// PowerShell `Get-CimInstance Win32_Service`，解析后过滤前缀并清洗路径。
 #[tauri::command]
 pub async fn discover_remote_windows_services(
+    app: tauri::AppHandle,
     username: String,
     password: String,
     server: String,
@@ -278,7 +279,7 @@ pub async fn discover_remote_windows_services(
 ) -> Result<Vec<DiscoveryItem>, String> {
     let cmd = r#"powershell -NoProfile -Command "Get-CimInstance Win32_Service | Select-Object Name,PathName | ConvertTo-Json -Compress""#;
     let out = crate::cmd_module::file_module::execute_remote_command(
-        &username, &password, &server, cmd, None, None,
+        app, &username, &password, &server, cmd, None, None,
     )
     .await
     .map_err(|e| format!("远端 Windows 服务查询失败: {e}"))?;
@@ -335,6 +336,7 @@ pub async fn discover_remote_windows_services(
 ///    解析 Mounts[].Source 作为建议目录；无 Source 时置空，前端展示 WorkingDir 并提示手动填写。
 #[tauri::command]
 pub async fn discover_remote_docker_containers(
+    app: tauri::AppHandle,
     username: String,
     password: String,
     server: String,
@@ -342,7 +344,7 @@ pub async fn discover_remote_docker_containers(
 ) -> Result<Vec<DiscoveryItem>, String> {
     let ps_cmd = "docker ps --format '{{.ID}}|{{.Names}}|{{.Image}}'";
     let ps_out = crate::cmd_module::file_module::execute_remote_command(
-        &username, &password, &server, ps_cmd, None, None,
+        app.clone(), &username, &password, &server, ps_cmd, None, None,
     )
     .await
     .map_err(|e| format!("docker ps 失败（可能未安装 Docker）：{e}"))?;
@@ -380,6 +382,7 @@ pub async fn discover_remote_docker_containers(
             id
         );
         let inspect_out = crate::cmd_module::file_module::execute_remote_command(
+            app.clone(),
             &username,
             &password,
             &server,

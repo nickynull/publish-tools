@@ -129,6 +129,14 @@ async function ensureSchema(database: Database) {
     if (!serverColumns.some((column) => column.name === "source_key")) {
         await database.execute("ALTER TABLE t_server ADD COLUMN source_key TEXT");
     }
+    // 项目发布STEP：服务备份路径（备份服务时存放日期文件夹的目录）
+    if (!serverColumns.some((column) => column.name === "service_backup_path")) {
+        await database.execute("ALTER TABLE t_server ADD COLUMN service_backup_path TEXT");
+    }
+    // 项目发布STEP：程序集暂存路径（上传待发布程序集的目录，发布时替换到服务路径）
+    if (!serverColumns.some((column) => column.name === "assembly_staging_path")) {
+        await database.execute("ALTER TABLE t_server ADD COLUMN assembly_staging_path TEXT");
+    }
     // 部分唯一索引：纳管行的 source_key 唯一（NULL 不受限制，本地自建行可多行为 NULL）
     await database.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_t_server_source_key ON t_server(source_key) WHERE source_key IS NOT NULL"

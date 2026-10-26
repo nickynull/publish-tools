@@ -98,6 +98,26 @@
             </el-form-item>
           </el-col>
           <el-col :span="24" class="mb20">
+            <el-form-item label="服务备份路径" prop="serviceBackupPath">
+              <el-input
+                v-model="state.ruleForm.serviceBackupPath"
+                placeholder="用于存放备份文件的目录，如 /backup 或 D:\backup（选填）"
+                maxlength="200"
+                clearable
+              ></el-input>
+            </el-form-item>
+          </el-col>
+          <el-col :span="24" class="mb20">
+            <el-form-item label="程序集暂存路径" prop="assemblyStagingPath">
+              <el-input
+                v-model="state.ruleForm.assemblyStagingPath"
+                placeholder="用于存放将要发布的程序集的目录，如 /staging 或 D:\staging（选填）"
+                maxlength="200"
+                clearable
+              ></el-input>
+            </el-form-item>
+          </el-col>
+          <el-col :span="24" class="mb20">
             <el-form-item label="描述" prop="description">
               <el-input
                 type="textarea"
@@ -160,6 +180,8 @@ const state = reactive<FormDialogType<RowServerType>>({
     account: "",
     pwd: "",
     description: null,
+    serviceBackupPath: null,
+    assemblyStagingPath: null,
   },
   dialog: {
     show: false,

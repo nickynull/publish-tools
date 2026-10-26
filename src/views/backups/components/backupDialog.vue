@@ -559,11 +559,16 @@ const showDllMode = (
     modelName += `：${dllModeArr[0]} ~ ${dllModeArr[1]}`;
   } else if (modelName == "TFS") {
     const selectTfsItem = JSON.parse(String(dllModeValue)) as SelectTfsType;
-    modelName += `：${selectTfsItem.tfsName}；${selectTfsItem.selectModel}：${selectTfsItem.selectValue[0].value} ~ `;
-    if (selectTfsItem.selectValue[1].value) {
-      modelName += `${selectTfsItem.selectValue[1].value}`;
+    modelName += `：${selectTfsItem.tfsName}；`;
+    if (selectTfsItem.selectModel === "最近时间") {
+      modelName += `最近时间：最近 ${selectTfsItem.selectValue[0].value} 天`;
     } else {
-      modelName += "latest";
+      modelName += `${selectTfsItem.selectModel}：${selectTfsItem.selectValue[0].value} ~ `;
+      if (selectTfsItem.selectValue[1].value) {
+        modelName += `${selectTfsItem.selectValue[1].value}`;
+      } else {
+        modelName += "latest";
+      }
     }
   }
   return modelName;

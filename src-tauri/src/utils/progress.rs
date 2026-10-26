@@ -72,6 +72,7 @@ impl ProgressState {
         self.emit_inner(kind, file, current, total, file_index, file_total, true);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn emit_inner(
         &mut self,
         kind: &str,

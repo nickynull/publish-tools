@@ -138,9 +138,7 @@ pub async fn execute_remote_command(
     let mut attempts = 0;
 
     while attempts < max_attempts {
-        if let Err(e) = check_cancelled() {
-            return Err(e);
-        }
+        check_cancelled()?;
         match remote_command(username, password, server, command).await {
             Ok(output) => return Ok(output),
             Err(e) => {
@@ -153,10 +151,8 @@ pub async fn execute_remote_command(
                     attempts < max_attempts,
                     &e,
                 );
-                if attempts < max_attempts {
-                    if !sleep_with_cancel(delay) {
-                        return Err(CANCELLED_MSG.to_string());
-                    }
+                if attempts < max_attempts && !sleep_with_cancel(delay) {
+                    return Err(CANCELLED_MSG.to_string());
                 }
             }
         }
@@ -693,9 +689,7 @@ pub async fn copy_path(
         .unwrap_or(RETRY_DELAY);
     let mut last_err = String::new();
     for attempt in 1..=max_attempts {
-        if let Err(e) = check_cancelled() {
-            return Err(e);
-        }
+        check_cancelled()?;
         match fs::copy(source, destination) {
             Ok(_) => return Ok(true),
             Err(e) => {
@@ -707,10 +701,8 @@ pub async fn copy_path(
                     source.display(),
                     last_err
                 );
-                if attempt < max_attempts {
-                    if !sleep_with_cancel(delay) {
-                        return Err(CANCELLED_MSG.to_string());
-                    }
+                if attempt < max_attempts && !sleep_with_cancel(delay) {
+                    return Err(CANCELLED_MSG.to_string());
                 }
             }
         }
@@ -1079,9 +1071,7 @@ pub async fn download_server_files(
     let mut attempts = 0;
     let mut err_msg = String::new();
     while attempts < MAX_RETRIES {
-        if let Err(e) = check_cancelled() {
-            return Err(e);
-        }
+        check_cancelled()?;
         match exec_download_server_files(
             local_paths.clone(),
             remote_paths.clone(),
@@ -1309,6 +1299,7 @@ fn download_server_file(
 /// * `Ok(true)` 成功
 /// * `Err(String)` 失败
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn upload_server_files(
     app: tauri::AppHandle,
     remote_paths: Vec<String>,
@@ -1329,9 +1320,7 @@ pub async fn upload_server_files(
     let mut attempts = 0;
     let mut err_msg = String::new();
     while attempts < max_attempts {
-        if let Err(e) = check_cancelled() {
-            return Err(e);
-        }
+        check_cancelled()?;
         match exec_upload_server_files(
             remote_paths.clone(),
             local_paths.clone(),
@@ -1353,10 +1342,8 @@ pub async fn upload_server_files(
                     attempts < max_attempts,
                     &e,
                 );
-                if attempts < max_attempts {
-                    if !sleep_with_cancel(delay) {
-                        return Err(CANCELLED_MSG.to_string());
-                    }
+                if attempts < max_attempts && !sleep_with_cancel(delay) {
+                    return Err(CANCELLED_MSG.to_string());
                 }
                 err_msg = e.to_string();
             }
@@ -1580,9 +1567,7 @@ pub async fn execute_local_command(
     let mut attempts = 0;
     let mut err_msg = String::new();
     while attempts < max_attempts {
-        if let Err(e) = check_cancelled() {
-            return Err(e);
-        }
+        check_cancelled()?;
         match exec_local_command(command, args.clone()).await {
             Ok(output) => return Ok(output),
             Err(e) => {
@@ -1595,10 +1580,8 @@ pub async fn execute_local_command(
                     attempts < max_attempts,
                     &e,
                 );
-                if attempts < max_attempts {
-                    if !sleep_with_cancel(delay) {
-                        return Err(CANCELLED_MSG.to_string());
-                    }
+                if attempts < max_attempts && !sleep_with_cancel(delay) {
+                    return Err(CANCELLED_MSG.to_string());
                 }
                 err_msg = e.to_string();
             }
@@ -1693,9 +1676,7 @@ pub async fn execute_local_command_with_working_dir(
     let mut attempts = 0;
     let mut err_msg = String::new();
     while attempts < MAX_RETRIES {
-        if let Err(e) = check_cancelled() {
-            return Err(e);
-        }
+        check_cancelled()?;
         match exec_local_command_with_working_dir(command, args.clone(), working_dir).await {
             Ok(output) => return Ok(output),
             Err(e) => {
@@ -1876,7 +1857,7 @@ pub async fn read_latest_mtime(dir: &str) -> Result<String, String> {
         }
         if let Ok(modified) = metadata.modified() {
             let modified_local: DateTime<Local> = modified.into();
-            if latest.map_or(true, |cur| modified_local > cur) {
+            if latest.is_none_or(|cur| modified_local > cur) {
                 latest = Some(modified_local);
             }
         }

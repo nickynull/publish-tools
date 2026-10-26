@@ -86,6 +86,7 @@ pub fn scan_zip_sources(file_paths: &[&str]) -> (u32, u64) {
 /// * `processed` - 累计已处理字节（跨文件累加）
 /// * `total_bytes` - 总字节（0 表示未知）
 /// * `progress` - 进度推送器（None 时不推送）
+#[allow(clippy::too_many_arguments)]
 pub fn copy_with_progress<R: Read, W: Write>(
     reader: &mut R,
     writer: &mut W,
@@ -104,11 +105,11 @@ pub fn copy_with_progress<R: Read, W: Write>(
         }
         writer.write_all(&buffer[..read_len])?;
         *processed += read_len as u64;
-        if let Some(progress) = progress.as_deref_mut() {
+        if let Some(progress) = &mut progress {
             progress.emit("zip", file_name, *processed, total_bytes, file_index, file_total);
         }
     }
-    if let Some(progress) = progress.as_deref_mut() {
+    if let Some(progress) = progress {
         progress.emit("zip", file_name, *processed, total_bytes, file_index, file_total);
     }
     Ok(())

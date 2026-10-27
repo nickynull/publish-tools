@@ -133,6 +133,7 @@ fn main() {
             file_module::save_content_to_file,
             file_module::read_content_to_file,
             file_module::zip_dir,
+            file_module::zip_dirs,
             file_module::get_encryption_key,
             file_module::find_tf_exe_path,
             file_module::find_msbuild_path,

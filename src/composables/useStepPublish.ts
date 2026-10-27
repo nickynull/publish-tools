@@ -125,7 +125,7 @@ const MODULE_NAMES = {
 };
 
 export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
-	const { printInfoLog, createLogTab, updateTabStatus, withLogTab, updateLogProgress, setLogProgressText, logPrintInfo } = log;
+	const { printInfoLog, updateLogProgress, setLogProgressText, logPrintInfo } = log;
 
 	// 本地发布日志上下文（TFS/Git 生成发布日志使用，与 home 的 generatePublishLog 独立）
 	const generatePublishLog = ref({
@@ -182,8 +182,8 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 		message?: string;
 	};
 	let unlistenBackendRetry: UnlistenFn | null = null;
-	// 同一功能的连续重试合并成一行（重试期间反复提示会刷屏）
-	let retryLogIndex = -1;
+	// 同一功能的连续重试合并成一行（重试期间反复提示会刷屏）；行数裁剪会使下标前移，改用日志行 id 定位
+	let retryLogId = -1;
 	let retryLogKey = "";
 
 	const handleBackendRetry = (payload: BackendRetryPayload) => {
@@ -200,14 +200,16 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			: `${nowDate}  [重试] ${source}第 ${attempt}/${total} 次失败：${message}，已达最大重试次数.`;
 
 		// 未开始任何功能时（重试不在运行上下文内）不打印，避免干扰空闲时的其它命令
-		const logs = logPrintInfo.value;
-		if (willRetry && key === retryLogKey && retryLogIndex >= 0 && logs[retryLogIndex]) {
+		if (willRetry && key === retryLogKey && retryLogId >= 0) {
 			// 连续同一错误：原地更新，避免多行刷屏
-			logs[retryLogIndex].content.value = text;
-			return;
+			const prevLog = logPrintInfo.value.find((l) => l.id === retryLogId);
+			if (prevLog) {
+				prevLog.content.value = text;
+				return;
+			}
 		}
 		// 最终失败用错误色记录，便于「失败日志」汇总；重试中为警告色
-		retryLogIndex = printInfoLog(text.replace(nowDate, ""), willRetry ? "log-warning" : "log-error");
+		retryLogId = printInfoLog(text.replace(nowDate, ""), willRetry ? "log-warning" : "log-error");
 		retryLogKey = willRetry ? key : "";
 	};
 
@@ -223,8 +225,9 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 		fileTotal?: number; // 共几个文件
 	};
 	let unlistenFileProgress: UnlistenFn | null = null;
-	// 进度写入目标：调用下载/压缩前置位、结束后清除（下载与压缩均串行执行，不存在并发串台）
-	let progressTarget: { logIndex: number; tabId?: string } | null = null;
+	// 进度写入目标：调用下载/压缩前置位、结束后清除（下载与压缩均串行执行，不存在并发串台）；
+	// 存日志行 id（printInfoLog 返回），行数裁剪后仍能正确定位
+	let progressTarget: { logId: number } | null = null;
 	// 进度文本前缀（如"已下载 2/5 个文件"），文件计数由调用方维护
 	let progressPrefix = "";
 
@@ -261,12 +264,12 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			const sizeText = total > 0 ? `（${formatBytes(current)} / ${formatBytes(total)}）` : "";
 			text = `${progressPrefix}${countText}${sizeText}`;
 		}
-		setLogProgressText(progressTarget.logIndex, text, progressTarget.tabId);
+		setLogProgressText(progressTarget.logId, text);
 	};
 
 	// 设置进度写入目标
-	const setProgressTarget = (logIndex: number, prefix: string, tabId?: string) => {
-		progressTarget = { logIndex, tabId };
+	const setProgressTarget = (logId: number, prefix: string) => {
+		progressTarget = { logId };
 		progressPrefix = prefix;
 	};
 	// 清除进度写入目标（后续事件不再写入）
@@ -586,10 +589,13 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 		serviceName: string,
 		action: "stop" | "start"
 	) => {
+		const actionText = action === "stop" ? "停止" : "启动";
 		const isStop = await isWinServiceStop(username, password, server, serviceName);
 		if (action == "stop" && isStop) return true;
 		if (action == "start" && !isStop) return true;
 
+		const switchStartTime = Date.now();
+		printInfoLog(`执行 sc ${action} "${serviceName}"（${server}）...`);
 		const switchServerResult = await execRemote({
 			username,
 			password,
@@ -598,7 +604,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			...getRetryArgs("service"),
 		});
 		if (switchServerResult.code !== 0) {
-			printInfoLog(switchServerResult.data, "log-error");
+			printInfoLog(`sc ${action} "${serviceName}" 执行失败：${switchServerResult.data}`, "log-error");
 			return false;
 		}
 
@@ -607,15 +613,24 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 		const { startTimeoutSecs, stopTimeoutSecs } = getServiceWaitTimeouts();
 		const timeoutSecs = action === "stop" ? stopTimeoutSecs : startTimeoutSecs;
 		const maxRetries = Math.max(1, Math.ceil((timeoutSecs * 1000) / retryInterval));
+		printInfoLog(`等待服务${actionText}确认（最长 ${timeoutSecs} 秒，每 ${retryInterval / 1000} 秒查询一次）...`);
+		let pollCount = 0;
 		for (let i = 0; i < maxRetries; i++) {
 			await new Promise((resolve) => setTimeout(resolve, retryInterval));
 			if (checkStop()) return false;
+			pollCount++;
 			const stopped = await isWinServiceStop(username, password, server, serviceName);
-			if (action === "stop" && stopped) return true;
-			if (action === "start" && !stopped) return true;
+			if (action === "stop" && stopped) {
+				printInfoLog(`已确认服务${actionText}（轮询 ${pollCount} 次，耗时 ${formatElapsed(Date.now() - switchStartTime)}）`);
+				return true;
+			}
+			if (action === "start" && !stopped) {
+				printInfoLog(`已确认服务${actionText}（轮询 ${pollCount} 次，耗时 ${formatElapsed(Date.now() - switchStartTime)}）`);
+				return true;
+			}
 		}
 
-		printInfoLog(`服务 ${serviceName} ${action === "stop" ? "关闭" : "启动"}超时（已等待 ${timeoutSecs} 秒），请手动检查.`, "log-warning");
+		printInfoLog(`服务 ${serviceName} ${actionText}超时（已等待 ${timeoutSecs} 秒），请手动检查.`, "log-warning");
 		return false;
 	};
 
@@ -627,14 +642,20 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 		serviceName: string,
 		action: "stop" | "start"
 	) => {
+		const switchStartTime = Date.now();
+		printInfoLog(`执行 docker ${action} ${serviceName}（${server}）...`);
 		const switchServerResult = await execRemote({
 			username,
 			password,
 			server,
 			command: `docker ${action} ${serviceName}`,
 		});
-		if (switchServerResult.code !== 0) printInfoLog(switchServerResult.data, "log-error");
-		return switchServerResult.code === 0;
+		if (switchServerResult.code !== 0) {
+			printInfoLog(`docker ${action} ${serviceName} 失败：${switchServerResult.data}`, "log-error");
+			return false;
+		}
+		printInfoLog(`docker ${action} ${serviceName} 完成（耗时 ${formatElapsed(Date.now() - switchStartTime)}）`);
+		return true;
 	};
 
 	// 停止服务实例（按部署环境分流）
@@ -758,10 +779,8 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 				return false;
 			}
 
-			const tabId = createLogTab("备份服务", serverInfo.name || "");
-			updateTabStatus(tabId, "running");
 			const serverStartTime = Date.now();
-			const backupSuccess = await withLogTab(tabId, async () => {
+			const backupSuccess = await (async () => {
 				const uName = serverInfo.account;
 				const uPwd = serverInfo.pwd;
 				const serverAddress = `${serverInfo.ip}:${serverInfo.port}`;
@@ -882,8 +901,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 					"log-success"
 				);
 				return true;
-			});
-			updateTabStatus(tabId, backupSuccess ? "success" : "error");
+			})();
 			if (!backupSuccess) {
 				isSuccess = false;
 				break;
@@ -954,9 +972,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 		for (let srvIdx = 0; srvIdx < wpfServerArr.length; srvIdx++) {
 			if (checkStop()) return false;
 			const wpfServer = wpfServerArr[srvIdx];
-			const tabId = createLogTab("打包wpf", wpfServer.name || "");
-			updateTabStatus(tabId, "running");
-			const packSuccess = await withLogTab(tabId, async () => {
+			const packSuccess = await (async () => {
 				if (!wpfServer.id) {
 					printInfoLog(` ${MODULE_NAMES.wpfClient} 未选择服务或该服务器不存在，请检查.`, "log-error");
 					return false;
@@ -1190,16 +1206,15 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 				"log-success"
 			);
 			return true;
-		});
-			updateTabStatus(tabId, packSuccess ? "success" : "error");
-			if (!packSuccess) {
-				isSuccess = false;
-				break;
-			}
+		})();
+		if (!packSuccess) {
+			isSuccess = false;
+			break;
 		}
-		if (isSuccess) {
-			printInfoLog(`打包wpf总耗时：${formatElapsed(Date.now() - overallStartTime)}。`);
-		}
+	}
+	if (isSuccess) {
+		printInfoLog(`打包wpf总耗时：${formatElapsed(Date.now() - overallStartTime)}。`);
+	}
 		return isSuccess;
 	};
 
@@ -1519,10 +1534,8 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 				}
 
 				const moduleNames = group.modules.map((m) => m.module.name);
-				const tabId = createLogTab(`上传-${moduleNames.join("、")}`, serverInfo.name || "");
-				updateTabStatus(tabId, "running");
 				const tabStartTime = Date.now();
-				const uploadSuccess = await withLogTab(tabId, async () => {
+				const uploadSuccess = await (async () => {
 					const uName = serverInfo.account;
 					const uPwd = serverInfo.pwd;
 					const serverAddress = `${serverInfo.ip}:${serverInfo.port}`;
@@ -1739,8 +1752,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 						"log-success"
 					);
 					return true;
-				});
-				updateTabStatus(tabId, uploadSuccess ? "success" : "error");
+				})();
 				if (!uploadSuccess) {
 					isSuccess = false;
 					break;
@@ -1793,9 +1805,11 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 				const serverInfo = await getServerDetail(ins.serverId);
 				if (!serverInfo) {
 					status = { statusText: "服务器不存在", running: null };
+					printInfoLog(`服务状态查询：服务器(ID:${ins.serverId})不存在`, "log-error");
 				} else {
 					const serverAddress = `${serverInfo.ip}:${serverInfo.port}`;
 					if (serverInfo.os === 1) {
+						printInfoLog(`查询服务状态：${serverInfo.name}（${serverAddress}，${displayOs(Number(serverInfo.os))}）sc query "${ins.identity}"`);
 						const queryResult = await execRemote({
 							username: serverInfo.account,
 							password: serverInfo.pwd,
@@ -1805,14 +1819,17 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 						const output = String(queryResult.data || "");
 						if (queryResult.code !== 0) {
 							status = { statusText: "查询失败", running: null };
+							printInfoLog(`服务状态查询失败：${serverInfo.name} / ${ins.identity}：${queryResult.data}`, "log-error");
 						} else if (output.includes("RUNNING")) {
 							status = { statusText: "运行中", running: true };
 						} else if (output.includes("STOPPED")) {
 							status = { statusText: "已停止", running: false };
 						} else {
 							status = { statusText: "未找到服务", running: null };
+							printInfoLog(`服务状态查询：${serverInfo.name} 未找到服务 ${ins.identity}`, "log-warning");
 						}
 					} else if (serverInfo.os === 2) {
+						printInfoLog(`查询服务状态：${serverInfo.name}（${serverAddress}，${displayOs(Number(serverInfo.os))}）docker inspect ${ins.identity}`);
 						const queryResult = await execRemote({
 							username: serverInfo.account,
 							password: serverInfo.pwd,
@@ -1822,6 +1839,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 						const output = String(queryResult.data || "").trim();
 						if (queryResult.code !== 0 || !output) {
 							status = { statusText: "未找到容器", running: null };
+							printInfoLog(`服务状态查询：${serverInfo.name} 未找到容器 ${ins.identity}`, "log-warning");
 						} else if (output === "running") {
 							status = { statusText: "运行中", running: true };
 						} else if (output === "exited" || output === "dead") {
@@ -1831,6 +1849,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 						}
 					} else {
 						status = { statusText: `未知环境(${displayOs(Number(serverInfo.os))})`, running: null };
+						printInfoLog(`服务状态查询：${serverInfo.name} 为未知部署环境（${displayOs(Number(serverInfo.os))}）`, "log-error");
 					}
 				}
 				statusCache.set(cacheKey, status);
@@ -1843,6 +1862,16 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 				statusText: status.statusText,
 				running: status.running,
 			});
+		}
+
+		// 结束汇总
+		if (rows.length > 0) {
+			const runningCount = rows.filter((r) => r.running === true).length;
+			const stoppedCount = rows.filter((r) => r.running === false).length;
+			const unknownCount = rows.length - runningCount - stoppedCount;
+			printInfoLog(
+				`服务状态查询完成：${rows.length} 个实例（运行中 ${runningCount} / 已停止 ${stoppedCount} / 未知 ${unknownCount}）`
+			);
 		}
 
 		result.code = hasError ? 1 : 0;
@@ -1950,14 +1979,17 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			const serverInfo = await getServerDetail(serverId);
 			if (!serverInfo) {
 				errorMsg += `服务[ID:${serverId}]不存在；`;
+				printInfoLog(`服务[ID:${serverId}]不存在，跳过读取.`, "log-error");
 				continue;
 			}
 			if (!serverInfo.assemblyStagingPath) {
 				errorMsg += `服务器[${serverInfo.name}]未配置[程序集暂存路径]；`;
+				printInfoLog(`服务器[${serverInfo.name}]未配置[程序集暂存路径]，跳过读取.`, "log-error");
 				continue;
 			}
 			const stagingBase = removeSlash(String(serverInfo.assemblyStagingPath));
 			const serverAddress = `${serverInfo.ip}:${serverInfo.port}`;
+			printInfoLog(`读取服务器程序集清单：${serverInfo.name}（${serverAddress}，${displayOs(Number(serverInfo.os))}）${stagingBase}`);
 
 			let queryResult;
 			if (serverInfo.os === 1) {
@@ -1969,7 +2001,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 					command: cmd,
 				});
 			} else {
-				const cmd = `cd '${stagingBase}' 2>/dev/null || exit 1; for d in */; do name="\${d%/}"; all=$(find "$d" -type f -printf '%T@|%TY-%Tm-%Td %TH:%TM:%TS|%p\\n' 2>/dev/null | sort -n); if [ -n "$all" ]; then newest=$(printf '%s\\n' "$all" | tail -1); oldest=$(printf '%s\\n' "$all" | head -1); nt=$(printf '%s' "$newest" | cut -d'|' -f2 | cut -d. -f1); np=$(printf '%s' "$newest" | cut -d'|' -f3-); ot=$(printf '%s' "$oldest" | cut -d'|' -f2 | cut -d. -f1); op=$(printf '%s' "$oldest" | cut -d'|' -f3-); echo "$name|$np|$nt|$op|$ot"; else echo "$name|||"; fi; done`;
+				const cmd = `cd '${stagingBase}' 2>/dev/null || exit 1; for d in */; do name="\${d%/}"; all=$(find "$d" -type f -printf '%T@|%TY-%Tm-%Td %TH:%TM:%TS|%p\\n' 2>/dev/null | sort -n); if [ -n "$all" ]; then newest=$(printf '%s\\n' "$all" | tail -1); oldest=$(printf '%s\\n' "$all" | head -1); nt=$(printf '%s' "$newest" | cut -d'|' -f2 | cut -d. -f1); np=$(printf '%s' "$newest" | cut -d'|' -f3-); np="\${np##*/}"; ot=$(printf '%s' "$oldest" | cut -d'|' -f2 | cut -d. -f1); op=$(printf '%s' "$oldest" | cut -d'|' -f3-); op="\${op##*/}"; echo "$name|$np|$nt|$op|$ot"; else echo "$name|||"; fi; done`;
 				queryResult = await execRemote({
 					username: serverInfo.account,
 					password: serverInfo.pwd,
@@ -1979,12 +2011,14 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			}
 			if (queryResult.code !== 0) {
 				errorMsg += `服务器[${serverInfo.name}]读取暂存路径失败：${queryResult.data}；`;
+				printInfoLog(`服务器[${serverInfo.name}]读取暂存路径失败：${queryResult.data}`, "log-error");
 				continue;
 			}
 			const output = String(queryResult.data || "");
 			const serverRows = parseAssemblyOutput(output, serverInfo.name || "");
 			if (serverRows.length < 1) {
 				errorMsg += `服务器[${serverInfo.name}]暂存路径为空或无子目录；`;
+				printInfoLog(`服务器[${serverInfo.name}]暂存路径为空或无子目录.`, "log-warning");
 				continue;
 			}
 			rows.push(...serverRows);
@@ -2123,6 +2157,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			result.msg = "应用配置中未找到任何服务器，请检查应用配置.";
 			return result;
 		}
+		printInfoLog(`开始核对程序集：本机 ${localMap.size} 个文件，${serverItems.length} 台服务器`);
 
 		const rows: AssemblyDiffRow[] = [];
 		let errorMsg = "";
@@ -2139,16 +2174,19 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			const serverInfo = await getServerDetail(serverId);
 			if (!serverInfo) {
 				errorMsg += `服务器[ID:${serverId}]不存在；`;
+				printInfoLog(`服务器[ID:${serverId}]不存在，跳过核对.`, "log-error");
 				continue;
 			}
 			if (!serverInfo.assemblyStagingPath) {
 				errorMsg += `服务器[${serverInfo.name}]未配置[程序集暂存路径]，请先在服务器管理中配置；`;
+				printInfoLog(`服务器[${serverInfo.name}]未配置[程序集暂存路径]，跳过核对.`, "log-error");
 				continue;
 			}
 			const stagingBase = removeSlash(String(serverInfo.assemblyStagingPath));
 			const serverAddress = `${serverInfo.ip}:${serverInfo.port}`;
 
 			// 服务器程序集清单（一次递归列出全部文件）
+			printInfoLog(`读取服务器程序集清单：${serverInfo.name}（${serverAddress}，${displayOs(Number(serverInfo.os))}）${stagingBase}`);
 			let queryResult;
 			if (serverInfo.os === 1) {
 				queryResult = await execRemote({
@@ -2167,9 +2205,11 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			}
 			if (queryResult.code !== 0) {
 				errorMsg += `服务器[${serverInfo.name}]读取程序集暂存路径失败：${queryResult.data}；`;
+				printInfoLog(`服务器[${serverInfo.name}]读取程序集暂存路径失败：${queryResult.data}`, "log-error");
 				continue;
 			}
 			const serverMap = parseFileListOutput(String(queryResult.data || ""));
+			printInfoLog(`服务器[${serverInfo.name}]共 ${serverMap.size} 个文件，开始逐模块比对...`);
 
 			// 逐模块比对（仅核对会上传到该服务器的模块）
 			for (const module of modules) {
@@ -2196,6 +2236,12 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 						module.name === MODULE_NAMES.wpfClient
 							? `服务器[${serverInfo.name}]未找到本机打包目录 ${localBase}/${localPrefix.replace(/\/$/, "")}，请先执行【打包WPF】；`
 							: `服务器[${serverInfo.name}]未找到本机程序集目录 ${localBase}/${module.name}，请先执行【获取程序集】；`;
+					printInfoLog(
+						module.name === MODULE_NAMES.wpfClient
+							? `未找到本机打包目录 ${localBase}/${localPrefix.replace(/\/$/, "")}，请先执行【打包WPF】.`
+							: `未找到本机程序集目录 ${localBase}/${module.name}，请先执行【获取程序集】.`,
+						"log-error"
+					);
 					continue;
 				}
 
@@ -2261,6 +2307,18 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 				a.moduleName.localeCompare(b.moduleName)
 		);
 
+		// 结束汇总
+		if (rows.length > 0) {
+			const diffRows = rows.filter((r) => !r.consistent).length;
+			const missingTotal = rows.reduce((sum, r) => sum + r.missingCount, 0);
+			const timeDiffTotal = rows.reduce((sum, r) => sum + r.timeDiffCount, 0);
+			const extraTotal = rows.reduce((sum, r) => sum + r.extraCount, 0);
+			printInfoLog(
+				`核对完成：共 ${rows.length} 行，差异 ${diffRows} 行（缺失 ${missingTotal} / 时间不一致 ${timeDiffTotal} / 服务器多出 ${extraTotal}）`,
+				diffRows > 0 ? "log-warning" : "log-success"
+			);
+		}
+
 		result.code = rows.length > 0 ? 0 : 1;
 		result.msg = rows.length > 0 ? errorMsg : errorMsg || "未查询到可核对的程序集";
 		result.data = rows;
@@ -2302,14 +2360,17 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			const serverInfo = await getServerDetail(serverId);
 			if (!serverInfo) {
 				errorMsg += `服务[ID:${serverId}]不存在；`;
+				printInfoLog(`服务[ID:${serverId}]不存在，跳过读取.`, "log-error");
 				continue;
 			}
 			if (!serverInfo.serviceBackupPath) {
 				errorMsg += `服务器[${serverInfo.name}]未配置[服务备份路径]；`;
+				printInfoLog(`服务器[${serverInfo.name}]未配置[服务备份路径]，跳过读取.`, "log-error");
 				continue;
 			}
 			const backupBase = removeSlash(String(serverInfo.serviceBackupPath));
 			const serverAddress = `${serverInfo.ip}:${serverInfo.port}`;
+			printInfoLog(`读取服务备份清单：${serverInfo.name}（${serverAddress}，${displayOs(Number(serverInfo.os))}）${backupBase}`);
 
 			let queryResult;
 			if (serverInfo.os === 1) {
@@ -2331,6 +2392,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			}
 			if (queryResult.code !== 0) {
 				errorMsg += `服务器[${serverInfo.name}]读取服务备份路径失败：${queryResult.data}；`;
+				printInfoLog(`服务器[${serverInfo.name}]读取服务备份路径失败：${queryResult.data}`, "log-error");
 				continue;
 			}
 			const lines = String(queryResult.data || "")
@@ -2339,6 +2401,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 				.filter((l) => l.includes("|"));
 			if (lines.length < 1) {
 				errorMsg += `服务器[${serverInfo.name}]服务备份路径为空或无备份文件夹；`;
+				printInfoLog(`服务器[${serverInfo.name}]服务备份路径为空或无备份文件夹.`, "log-warning");
 				continue;
 			}
 			for (const line of lines) {
@@ -2603,11 +2666,8 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			for (const ins of serverInstances) {
 				// 停止检查：实例一旦开始发布则完整执行（停止→替换→启动），避免留下已停止的服务
 				if (checkStop()) return false;
-				// 每个服务实例一个日志标签页
-				const tabId = createLogTab(ins.module, serverInfo.name || "", ins.identity || "files");
-				updateTabStatus(tabId, "running");
 				const instanceStartTime = Date.now();
-				const instanceSuccess = await withLogTab(tabId, async () => {
+				const instanceSuccess = await (async () => {
 					const uName = serverInfo.account;
 					const uPwd = serverInfo.pwd;
 					const serverAddress = `${serverInfo.ip}:${serverInfo.port}`;
@@ -2723,8 +2783,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 					line: `发布成功 ${targetText}`,
 				});
 				return true;
-			});
-				updateTabStatus(tabId, instanceSuccess ? "success" : "error");
+			})();
 				if (!instanceSuccess) {
 					isSuccess = false;
 					break;

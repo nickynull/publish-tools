@@ -49,14 +49,13 @@
                     <div class="card-title">
                         <div>发布信息<template v-if="appModuleList.length > 0">({{ appModuleList.length }})</template></div>
                         <div class="item-btn-box">
-                            <el-button title="查看功能说明" size="small" type="primary" plain :icon="QuestionFilled"
+                            <el-button title="查看功能说明" size="small" type="primary" :icon="QuestionFilled"
                                 @click="onOpenHelpDialog">功能说明</el-button>
-                            <el-button title="修改应用配置" size="small" type="success" plain :icon="EditPen" :disabled="isAnyLoading ||
+                            <el-button title="修改应用配置" size="small" type="success" :icon="EditPen" :disabled="isAnyLoading ||
                                 state.publishData.appconfigData.id == null ||
                                 state.publishData.appconfigData.id <= 0
                                 " @click="onOpenAppConfig">修改</el-button>
-                            <el-button title="刷新|重置" size="small" type="info" plain :icon="Refresh"
-                                :disabled="isAnyLoading"
+                            <el-button title="刷新|重置" size="small" type="info" :icon="Refresh" :disabled="isAnyLoading"
                                 @click="getProjectDefault({ keepCurrentEnvironment: true })">重置</el-button>
                         </div>
                     </div>
@@ -83,7 +82,7 @@
                                         <a class="t-link-path" href="javascript:void(0);" title="打开程序集输出路径"
                                             @click="onOpenAssemblyOutPath(state.publishData.assemblyOutPath)"
                                             v-if="state.publishData.assemblyOutPath">{{
-                                                state.publishData.assemblyOutPath
+                                            state.publishData.assemblyOutPath
                                             }}</a>
                                         <label v-else>未配置，将采用默认路径</label>
                                     </td>
@@ -174,7 +173,7 @@
                                     <td>
                                         <a class="t-link-path" href="javascript:void(0);" title="打开客户端生成路径"
                                             @click="onOpenClientPath(mod.mod.clientPath as string)">{{
-                                                mod.mod.clientPath
+                                            mod.mod.clientPath
                                             }}</a>
                                     </td>
                                 </tr>
@@ -230,49 +229,63 @@
                     <div class="card-title">
                         <div>日志信息</div>
                         <div class="item-btn-box">
-                            <el-button title="停止当前功能（立即停止后续操作）" size="small" type="danger" plain
-                                :disabled="!isAnyLoading" @click="onStopFunModule">
+                            <el-switch v-model="showLogLineNo" size="small" title="显示/隐藏日志行号"
+                                @change="onShowLogLineNoChange" />
+                            <span class="log-ctrl-label">行号</span>
+                            <span class="log-ctrl-label">行数限制</span>
+                            <el-input-number title="日志最多保留的行数（超出后自动清理最旧的行）" size="small" v-model="maxLogLines" :min="10"
+                                :max="100000" :step="100" :controls="false" style="width: 110px"
+                                @change="setMaxLogLines" />
+                            <span class="log-max-lines-suffix">行</span>
+                            <el-button title="停止当前功能（立即停止后续操作）" size="small" type="danger" :disabled="!isAnyLoading"
+                                @click="onStopFunModule">
                                 <el-icon style="margin-right: 4px">
                                     <VideoPause />
                                 </el-icon>停止
                             </el-button>
-                            <el-button title="清空日志" size="small" type="info" plain :icon="CircleClose"
+                            <el-button title="清空日志" size="small" type="info" :icon="CircleClose"
                                 @click="onRemoveLogs">清空日志</el-button>
                         </div>
                     </div>
                     <div class="card-item-content log-content">
-                        <el-tabs v-model="activeLogTab" type="border-card" class="log-tabs"
-                            :class="{ 'log-tabs-single': displayTabs.length <= 1 }">
-                            <el-tab-pane v-for="tab in displayTabs" :key="tab.id" :name="tab.id">
-                                <template #label>
-                                    <span>
-                                        <span v-if="tab.status === 'running'"
-                                            style="color: var(--el-color-warning)">●</span>
-                                        <span v-else-if="tab.status === 'success'"
-                                            style="color: var(--el-color-success)">●</span>
-                                        <span v-else-if="tab.status === 'error'"
-                                            style="color: var(--el-color-danger)">●</span>
-                                        <span v-else style="color: var(--el-color-info)">●</span>
-                                        {{ tab.label }}
-                                    </span>
-                                </template>
-                                <div :ref="(el: any) => setTabContentRef(tab.id, el)" class="log-tab-pane-content">
-                                    <p v-for="logLine in tab.logs" :class="logLine.type">
-                                        {{ logLine.content.value }}
-                                        <el-text type="primary" size="small"
-                                            v-if="logLine.content.uploadFile?.progressText">{{
+                        <el-tabs model-value="main" type="border-card" class="log-tabs log-tabs-single">
+                            <el-tab-pane name="main" label="总体日志">
+                                <div :ref="setLogContentRef" class="log-tab-pane-content">
+                                    <p v-for="(logLine, logIndex) in logPrintInfo"
+                                        :class="[logLine.type, { 'log-divider-row': logLine.divider }]">
+                                        <!-- 操作分割线：区分不同功能操作的日志区间（行号始终在最左侧） -->
+                                        <template v-if="logLine.divider">
+                                            <span v-if="showLogLineNo" class="log-line-no"
+                                                :style="{ minWidth: logLineNoWidth }">{{
+                                                logLine.id ?? logIndex + 1
+                                                }}</span>
+                                            <span class="log-divider">
+                                                <span class="log-divider-line"></span>
+                                                <span v-if="logLine.content.value" class="log-divider-label">{{
+                                                    logLine.content.value }}</span>
+                                                <span class="log-divider-line"></span>
+                                            </span>
+                                        </template>
+                                        <template v-else>
+                                            <span v-if="showLogLineNo" class="log-line-no"
+                                                :style="{ minWidth: logLineNoWidth }">{{
+                                                logLine.id ?? logIndex + 1
+                                                }}</span>
+                                            {{ logLine.content.value }}
+                                            <el-text type="primary" size="small"
+                                                v-if="logLine.content.uploadFile?.progressText">{{
                                                 logLine.content.uploadFile.progressText }}</el-text>
-                                        <el-text :type="logLine.content.uploadFile.currNumber >=
-                                            logLine.content.uploadFile.totalNumber
-                                            ? 'primary'
-                                            : 'warning'
-                                            " size="small"
-                                            v-else-if="logLine.content.uploadFile && logLine.content.uploadFile.totalNumber > 0">{{
-                                                logLine.content.uploadFile.prefix
-                                            }}{{ logLine.content.uploadFile.currNumber }}/{{
+                                            <el-text :type="logLine.content.uploadFile.currNumber >=
                                                 logLine.content.uploadFile.totalNumber
-                                            }}
-                                            个文件。</el-text>
+                                                ? 'primary'
+                                                : 'warning'
+                                                " size="small" v-else-if="logLine.content.uploadFile && logLine.content.uploadFile.totalNumber > 0">{{
+                                                logLine.content.uploadFile.prefix
+                                                }}{{ logLine.content.uploadFile.currNumber }}/{{
+                                                logLine.content.uploadFile.totalNumber
+                                                }}
+                                                个文件。</el-text>
+                                        </template>
                                     </p>
                                 </div>
                             </el-tab-pane>
@@ -285,14 +298,11 @@
         <!-- 服务管理对话框 -->
         <el-dialog v-model="serviceStatusVisible" title="服务管理" width="1080px" draggable>
             <div class="status-batch-bar">
-                <el-button size="small" type="danger" plain
-                    :disabled="!selectedStatusRows.length || serviceStatusOperating"
+                <el-button size="small" type="danger" :disabled="!selectedStatusRows.length || serviceStatusOperating"
                     @click="onBatchControlService('stop')">批量停止</el-button>
-                <el-button size="small" type="primary" plain
-                    :disabled="!selectedStatusRows.length || serviceStatusOperating"
+                <el-button size="small" type="primary" :disabled="!selectedStatusRows.length || serviceStatusOperating"
                     @click="onBatchControlService('start')">批量启动</el-button>
-                <el-button size="small" type="warning" plain
-                    :disabled="!selectedStatusRows.length || serviceStatusOperating"
+                <el-button size="small" type="warning" :disabled="!selectedStatusRows.length || serviceStatusOperating"
                     @click="onBatchControlService('restart')">批量重启</el-button>
                 <el-button size="small" type="danger" text :icon="VideoPause" :disabled="!isDialogOperating"
                     title="停止当前查询/服务操作" @click="onStopDialogOp">停止</el-button>
@@ -327,7 +337,7 @@
                 </el-table-column>
             </el-table>
             <template #footer>
-                <el-button @click="serviceStatusVisible = false">关 闭</el-button>
+                <el-button @click="serviceStatusVisible = false">关闭</el-button>
             </template>
         </el-dialog>
 
@@ -338,16 +348,16 @@
             <el-table :data="stagingRows" size="default" border v-loading="stagingLoading" class="staging-table">
                 <el-table-column type="index" label="序号" width="60" />
                 <el-table-column prop="serverName" label="服务器" min-width="130" />
-                <el-table-column prop="moduleName" label="模块目录" min-width="140" />
+                <el-table-column prop="moduleName" label="模块目录" min-width="130" />
                 <el-table-column prop="latestFileName" label="最新文件名" min-width="200" />
-                <el-table-column prop="latestFileTime" label="最新文件时间" min-width="165" />
+                <el-table-column prop="latestFileTime" label="最新文件时间" min-width="160" />
                 <el-table-column prop="oldestFileName" label="最旧文件名" min-width="200" />
-                <el-table-column prop="oldestFileTime" label="最旧文件时间" min-width="165" />
+                <el-table-column prop="oldestFileTime" label="最旧文件时间" min-width="160" />
             </el-table>
             <template #footer>
-                <el-button type="danger" plain size="small" :icon="VideoPause" :disabled="!stagingLoading"
-                    title="停止当前查询" @click="onStopDialogOp">停止</el-button>
-                <el-button @click="stagingVisible = false">关 闭</el-button>
+                <el-button type="danger" size="small" :icon="VideoPause" :disabled="!stagingLoading" title="停止当前查询"
+                    @click="onStopDialogOp">停止</el-button>
+                <el-button @click="stagingVisible = false">关闭</el-button>
             </template>
         </el-dialog>
 
@@ -369,10 +379,10 @@
                         <div class="check-detail" v-if="row.details.length > 0">
                             <div v-for="(detail, i) in row.details" :key="i" class="check-detail-item">
                                 <el-tag :type="checkDiffTagType(detail.type)" size="small">{{ checkDiffText(detail.type)
-                                }}</el-tag>
+                                    }}</el-tag>
                                 <span class="check-detail-file">{{ detail.file }}</span>
                                 <span class="check-detail-time">本地：{{ detail.localTime }}　服务器：{{ detail.serverTime
-                                }}</span>
+                                    }}</span>
                             </div>
                         </div>
                         <div v-else class="check-detail-empty">无差异明细</div>
@@ -394,9 +404,9 @@
                 </el-table-column>
             </el-table>
             <template #footer>
-                <el-button type="danger" plain size="small" :icon="VideoPause" :disabled="!checkLoading" title="停止当前核对"
+                <el-button type="danger" size="small" :icon="VideoPause" :disabled="!checkLoading" title="停止当前核对"
                     @click="onStopDialogOp">停止</el-button>
-                <el-button @click="checkVisible = false">关 闭</el-button>
+                <el-button @click="checkVisible = false">关闭</el-button>
             </template>
         </el-dialog>
 
@@ -417,17 +427,17 @@
                 </el-table-column>
                 <el-table-column label="操作" width="140" fixed="right">
                     <template #default="scope">
-                        <el-button size="small" type="warning" plain :disabled="backupDeleting || backupRestoring"
+                        <el-button size="small" type="warning" :disabled="backupDeleting || backupRestoring"
                             @click="onRestoreServiceBackup(scope.row)">恢复</el-button>
-                        <el-button size="small" type="danger" plain :disabled="backupDeleting || backupRestoring"
+                        <el-button size="small" type="danger" :disabled="backupDeleting || backupRestoring"
                             @click="onDeleteServiceBackup(scope.row)">删除</el-button>
                     </template>
                 </el-table-column>
             </el-table>
             <template #footer>
-                <el-button type="danger" plain size="small" :icon="VideoPause" :disabled="!isBackupOperating"
+                <el-button type="danger" size="small" :icon="VideoPause" :disabled="!isBackupOperating"
                     title="停止当前查询/删除/恢复操作" @click="onStopDialogOp">停止</el-button>
-                <el-button @click="backupVisible = false">关 闭</el-button>
+                <el-button @click="backupVisible = false">关闭</el-button>
             </template>
         </el-dialog>
 
@@ -478,13 +488,39 @@ import {
 const stepLogApi = useStepLog();
 
 const {
-    activeLogTab,
-    displayTabs,
-    setTabContentRef,
+    logPrintInfo,
+    maxLogLines,
+    setMaxLogLines,
+    setLogContentRef,
     printInfoLog,
+    printLogDivider,
     onRemoveLogs,
     initLogs,
 } = stepLogApi;
+
+// 日志行号显示开关：存 localStorage 本机记忆，默认开
+const STEP_LOG_LINE_NO_VISIBLE_KEY = "stepLogShowLineNo";
+const loadShowLogLineNo = () => {
+    try {
+        return localStorage.getItem(STEP_LOG_LINE_NO_VISIBLE_KEY) !== "0";
+    } catch {
+        return true;
+    }
+};
+const showLogLineNo = ref(loadShowLogLineNo());
+const onShowLogLineNoChange = (value: boolean | string | number) => {
+    try {
+        localStorage.setItem(STEP_LOG_LINE_NO_VISIBLE_KEY, value ? "1" : "0");
+    } catch {
+        // localStorage 不可用时仅本次会话生效
+    }
+};
+
+// 行号列宽：按当前最大行号（日志行 id 自增，最后一行即最大值）的位数自适应，所有行号按同一宽度右对齐
+const logLineNoWidth = computed(() => {
+    const lastId = logPrintInfo.value.length > 0 ? logPrintInfo.value[logPrintInfo.value.length - 1].id ?? 1 : 1;
+    return `${String(lastId).length + 1}ch`;
+});
 
 // 引入组件
 const appconfigDialogRef = ref();
@@ -751,21 +787,21 @@ const checkClientPathRecentFiles = async (opTitle: string): Promise<boolean> => 
     const recentBefore = new Date().getTime() - Math.max(1, Number(recentMinutes.value) || 10) * 60 * 1000;
     // 逐个模块读取本机程序集目录下最新文件修改时间
     // WpfClient 按操作与产物结构区分：
-    //   获取程序集 → 产物在 <输出路径>；
-    //   上传程序集 → 上传目标是 packOutput（打包WPF后才存在），检查其一级文件（各 zip + Manifest.xml）
-    //   打包WPF -> 产物在 <输出路径>/[生成的目录]
+    //  获取程序集 → 产物在 <输出路径>；
+    //  上传程序集 → 上传目标是 packOutput（打包WPF后才存在），检查其一级文件（各 zip + Manifest.xml）
+    //  打包WPF -> 产物在 <输出路径>/[生成的目录]
     const latestTexts = new Array<string>();
     try {
         for (const mod of modules) {
             // 本模块待检查的目录清单（label, dir）
             const checkDirs: { label: string; dir: string }[] = [];
-            if (opTitle === "获取程序集"){
+            if (opTitle === "获取程序集") {
                 checkDirs.push({ label: mod.name, dir: `${mod.mod.clientPath}` });
             }
             if (opTitle === "上传程序集") {
                 if (mod.key === "wpfClient") {
                     checkDirs.push({ label: mod.name, dir: `${outPath}/${mod.name}/packOutput` });
-                } 
+                }
                 else {
                     checkDirs.push({ label: mod.name, dir: `${outPath}/${mod.name}` });
                 }
@@ -776,7 +812,7 @@ const checkClientPathRecentFiles = async (opTitle: string): Promise<boolean> => 
                     checkDirs.push({ label: mod.name, dir: `${outPath}/${mod.name}/${generateDir}` });
                 }
             }
-           
+
             let hasRecentInModule = false;
             const moduleTexts = new Array<string>();
             for (const checkDir of checkDirs) {
@@ -874,15 +910,19 @@ const onFunModuleHandle = async (index: number) => {
         if (!(await checkClientPathRecentFiles(title))) return;
     }
 
-    onRemoveLogs();
+    // 日志不再每次执行前自动清空：单页签持续累积，靠行数上限滚动淘汰；仅首次进入时打印项目/环境信息
+    if (logPrintInfo.value.length < 1) {
+        initLogs(state.publishData.projectName, displayEnvironment(state.publishData.environment));
+    }
     state.funModule[index].loading = true;
     currModuleIndex.value = index;
-    initLogs(state.publishData.projectName, displayEnvironment(state.publishData.environment));
 
     // 加载发布设置缓存（供 copy/服务启停/上传 的 getRetryArgs 使用）
     await loadPublishSettings();
     projectAssemblyOutPath.value = await getProjectOutPath();
 
+    // 操作日志区间：开始前打印分割线（带操作名），结束时再打印一条收尾分割线
+    printLogDivider(`开始执行【${title}】`);
     let isSuccess = false;
     try {
         isSuccess = await executeFunModule(title);
@@ -899,6 +939,7 @@ const onFunModuleHandle = async (index: number) => {
         if (title === "上传程序集") printInfoLog("上传程序集成功。");
         if (title === "发布") printInfoLog("发布成功。");
     }
+    printLogDivider(`【${title}】执行结束`);
 };
 
 // 执行功能模块（界面按钮共用），返回是否成功
@@ -1525,6 +1566,22 @@ $log-console-text: #ffffff;
         flex: 1;
         text-align: right;
         font-weight: normal;
+        flex-direction: row;
+
+        // 日志控件文字标签（行号 / 行数限制）
+        .log-ctrl-label {
+            margin: 0 2px 0 6px;
+            font-size: 12px;
+            color: var(--el-text-color-secondary);
+            white-space: nowrap;
+        }
+
+        // 日志行数配置的单位后缀
+        .log-max-lines-suffix {
+            margin: 0 8px 0 4px;
+            font-size: 12px;
+            color: var(--el-text-color-secondary);
+        }
     }
 }
 
@@ -1755,9 +1812,55 @@ $log-console-text: #ffffff;
                     padding: 0.5rem 1em 0.5rem 0.5rem;
                     text-align: left;
 
+                    // 日志行号：行内块 + 右对齐，列宽由行内样式按最大行号位数统一控制
+                    .log-line-no {
+                        display: inline-block;
+                        margin-right: 6px;
+                        font-size: 12px;
+                        color: var(--el-text-color-secondary);
+                        text-align: right;
+                        user-select: none;
+                    }
+
                     // 日志行配色固定（终端风格），覆盖 theme/app.scss 中跟随主题的 .log-* 定义
                     .log-info {
                         color: $log-console-text;
+                    }
+
+                    // 操作分割线：左右两侧横线夹住操作标题，区分不同功能操作的日志区间
+                    // 整行 flex 布局：行号列固定在最左侧，横线占满剩余宽度，保证不换行
+                    .log-divider-row {
+                        display: flex;
+                        align-items: center;
+                        gap: 8px;
+                        color: var(--el-text-color-secondary);
+                        font-size: 12px;
+                        user-select: none;
+
+                        // 行内块行号在 flex 容器里作为固定宽度列
+                        .log-line-no {
+                            flex: 0 0 auto;
+                            margin-right: 0;
+                        }
+
+                        .log-divider {
+                            display: flex;
+                            align-items: center;
+                            gap: 8px;
+                            flex: 1 1 auto;
+                            min-width: 0;
+                        }
+
+                        .log-divider-line {
+                            flex: 1 1 auto;
+                            height: 1px;
+                            background-color: var(--el-border-color);
+                        }
+
+                        .log-divider-label {
+                            flex: 0 0 auto;
+                            white-space: nowrap;
+                        }
                     }
 
                     .log-warning {

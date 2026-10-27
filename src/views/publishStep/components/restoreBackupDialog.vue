@@ -1,36 +1,36 @@
 <template>
   <el-dialog v-model="visible" :title="`恢复服务备份 - ${serverName}`" width="640px" draggable>
-    <el-form label-width="100px">
-      <el-form-item label="备份文件夹">
-        <el-select v-model="selectedFolderPath" placeholder="请选择备份文件夹（日期备份下的服务文件夹）" filterable style="width: 100%">
-          <el-option v-for="folder in folders" :key="folder.path" :value="folder.path"
-            :label="`${folder.dateFolder}/${folder.name}（${folder.time}）`" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="恢复服务">
-        <el-select v-model="selectedServiceIndex" placeholder="请选择恢复服务" filterable style="width: 100%">
-          <el-option v-for="(svc, idx) in services" :key="`${svc.module}_${svc.path}_${idx}`" :value="idx"
-            :label="`${svc.module} / ${svc.identity || '无服务标识'} / ${svc.path}`" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="自动匹配">
-        <el-switch v-model="autoMatch" />
-        <span class="restore-tip">开启后，切换备份文件夹或恢复服务时自动匹配同名（目录名一致）的另一方；关闭后可人工自由选择</span>
-      </el-form-item>
-      <el-form-item v-if="selectedFolderPath && selectedServiceIndex >= 0" label="恢复内容">
-        <el-alert type="info" :closable="false" show-icon>
-          <template #title>
-            {{ restoreContentText }}，流程：停止服务（如有）→ 替换文件 → 启动服务（如有）
-          </template>
-        </el-alert>
-      </el-form-item>
-    </el-form>
-    <template #footer>
-      <el-button v-if="loading" type="danger" plain :icon="VideoPause" title="停止当前恢复操作"
-        @click="emit('stop')">停止</el-button>
-      <el-button @click="visible = false">取 消</el-button>
-      <el-button type="primary" :loading="loading" @click="onConfirm">确定恢复</el-button>
-    </template>
+  <el-form label-width="100px">
+  <el-form-item label="备份文件夹">
+  <el-select v-model="selectedFolderPath" placeholder="请选择备份文件夹（日期备份下的服务文件夹）" filterable style="width: 100%">
+  <el-option v-for="folder in folders" :key="folder.path" :value="folder.path"
+  :label="`${folder.dateFolder}/${folder.name}（${folder.time}）`" />
+  </el-select>
+  </el-form-item>
+  <el-form-item label="恢复服务">
+  <el-select v-model="selectedServiceIndex" placeholder="请选择恢复服务" filterable style="width: 100%">
+  <el-option v-for="(svc, idx) in services" :key="`${svc.module}_${svc.path}_${idx}`" :value="idx"
+  :label="`${svc.module} / ${svc.identity || '无服务标识'} / ${svc.path}`" />
+  </el-select>
+  </el-form-item>
+  <el-form-item label="自动匹配">
+  <el-switch v-model="autoMatch" />
+  <span class="restore-tip">开启后，切换备份文件夹或恢复服务时自动匹配同名（目录名一致）的另一方；关闭后可人工自由选择</span>
+  </el-form-item>
+  <el-form-item v-if="selectedFolderPath && selectedServiceIndex >= 0" label="恢复内容">
+  <el-alert type="info" :closable="false" show-icon>
+  <template #title>
+  {{ restoreContentText }}，流程：停止服务（如有）→ 替换文件 → 启动服务（如有）
+  </template>
+  </el-alert>
+  </el-form-item>
+  </el-form>
+  <template #footer>
+  <el-button v-if="loading" type="danger"  :icon="VideoPause" title="停止当前恢复操作"
+  @click="emit('stop')">停止</el-button>
+  <el-button @click="visible = false">取 消</el-button>
+  <el-button type="primary" :loading="loading" @click="onConfirm">确定恢复</el-button>
+  </template>
   </el-dialog>
 </template>
 
@@ -96,11 +96,11 @@ const folderMatchesService = (folderName: string, leaf: string) => {
 watch(
   () => props.modelValue,
   (val) => {
-    if (val) {
-      selectedFolderPath.value = "";
-      selectedServiceIndex.value = props.services.length === 1 ? 0 : -1;
-      autoMatch.value = true;
-    }
+  if (val) {
+  selectedFolderPath.value = "";
+  selectedServiceIndex.value = props.services.length === 1 ? 0 : -1;
+  autoMatch.value = true;
+  }
   }
 );
 
@@ -108,8 +108,8 @@ watch(
 watch(selectedFolderName, (folderName) => {
   if (!autoMatch.value || !folderName) return;
   if (selectedServiceIndex.value >= 0) {
-    const leaf = leafOf(props.services[selectedServiceIndex.value]?.path || "");
-    if (leaf && folderMatchesService(folderName, leaf)) return; // 当前服务已匹配，不切换
+  const leaf = leafOf(props.services[selectedServiceIndex.value]?.path || "");
+  if (leaf && folderMatchesService(folderName, leaf)) return; // 当前服务已匹配，不切换
   }
   const idx = props.services.findIndex((svc) => folderMatchesService(folderName, leafOf(svc.path)));
   if (idx >= 0) selectedServiceIndex.value = idx;
@@ -125,32 +125,32 @@ watch(selectedServiceIndex, (idx) => {
 
 const onConfirm = async () => {
   if (!selectedFolderPath.value) {
-    ElMessage.warning("请选择备份文件夹.");
-    return;
+  ElMessage.warning("请选择备份文件夹.");
+  return;
   }
   if (selectedServiceIndex.value < 0) {
-    ElMessage.warning("请选择恢复服务.");
-    return;
+  ElMessage.warning("请选择恢复服务.");
+  return;
   }
   const svc = props.services[selectedServiceIndex.value];
   const folder = props.folders.find((f) => f.path === selectedFolderPath.value);
   const isWpfClient = (svc?.module || "").toLowerCase() === "wpfclient";
   const scopeText = isWpfClient ? "全部文件" : "一级目录中的所有 DLL";
   try {
-    await ElMessageBox.confirm(
-      `确认恢复？\n备份文件夹：${folder?.dateFolder || ""}/${folder?.name || ""}\n恢复服务：${svc.module} / ${svc.path}\n恢复内容：${scopeText}\n\n流程：停止服务（如有）→ 替换文件 → 启动服务（如有）`,
-      "恢复确认",
-      { type: "warning", confirmButtonText: "确定恢复", cancelButtonText: "取 消", customStyle: { whiteSpace: "pre-line" } as any }
-    );
+  await ElMessageBox.confirm(
+  `确认恢复？\n备份文件夹：${folder?.dateFolder || ""}/${folder?.name || ""}\n恢复服务：${svc.module} / ${svc.path}\n恢复内容：${scopeText}\n\n流程：停止服务（如有）→ 替换文件 → 启动服务（如有）`,
+  "恢复确认",
+  { type: "warning", confirmButtonText: "确定恢复", cancelButtonText: "取 消", customStyle: { whiteSpace: "pre-line" } as any }
+  );
   } catch {
-    return; // 用户取消
+  return; // 用户取消
   }
   emit("restore", {
-    backupPath: selectedFolderPath.value,
-    backupLabel: `${folder?.dateFolder || ""}/${folder?.name || ""}`,
-    module: svc.module,
-    servicePath: svc.path,
-    identity: svc.identity || "",
+  backupPath: selectedFolderPath.value,
+  backupLabel: `${folder?.dateFolder || ""}/${folder?.name || ""}`,
+  module: svc.module,
+  servicePath: svc.path,
+  identity: svc.identity || "",
   });
 };
 </script>

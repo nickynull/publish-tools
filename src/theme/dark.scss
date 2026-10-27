@@ -45,16 +45,14 @@
 	--el-border-color: var(--next-border-black) !important;
 	--el-border-color-light: var(--next-border-black) !important;
 	--el-border-color-lighter: var(--next-border-black) !important;
-	--el-border-color-extra-light: var(--el-color-primary-light-8) !important;
+	--el-border-color-extra-light: var(--next-border-black) !important;
 	--el-text-color-regular: var(--next-text-color-regular) !important;
 	--el-bg-color: var(--next-color-disabled) !important;
 	--el-color-primary-light-9: var(--next-color-hover) !important;
 	--el-text-color-disabled: var(--next-text-color-placeholder) !important;
-	--el-text-color-disabled-base: var(--el-color-primary) !important;
 	--el-text-color-placeholder: var(--next-text-color-placeholder) !important;
 	--el-disabled-bg-color: var(--next-color-disabled) !important;
 	--el-fill-base: var(--next-color-white) !important;
-	--el-fill-colo: var(--next-color-hover-rgba) !important;
 	--el-fill-color: var(--next-color-hover-rgba) !important;
 	--el-fill-color-blank: var(--next-color-disabled) !important;
 	--el-fill-color-light: var(--next-color-hover-rgba) !important;
@@ -63,17 +61,12 @@
 	--el-fill-color-lighter: var(--next-color-hover-rgba) !important;
 
 	// button
-	.el-button {
-		&:hover {
-			border-color: var(--next-border-color) !important;
-		}
-	}
-	// 实心按钮：深底白字。排除 plain 按钮——plain 是浅色底，强制白字会「白字压浅底」看不清
-	.el-button--primary:not(.is-plain),
-	.el-button--info:not(.is-plain),
-	.el-button--danger:not(.is-plain),
-	.el-button--success:not(.is-plain),
-	.el-button--warning:not(.is-plain) {
+	// 实色按钮强制白字；text/link 按钮无背景，需保留类型色
+	.el-button--primary:not(.is-text):not(.is-link),
+	.el-button--info:not(.is-text):not(.is-link),
+	.el-button--danger:not(.is-text):not(.is-link),
+	.el-button--success:not(.is-text):not(.is-link),
+	.el-button--warning:not(.is-text):not(.is-link) {
 		--el-button-text-color: var(--next-color-white) !important;
 		--el-button-hover-text-color: var(--next-color-white) !important;
 		--el-button-disabled-text-color: var(--next-color-white) !important;
@@ -81,20 +74,30 @@
 			border-color: var(--el-button-hover-border-color, var(--el-button-hover-bg-color)) !important;
 		}
 	}
-	// plain 按钮：深色下改为「透明底 + 语义色文字/边框」，hover 时反白为实心语义色
-	@each $type in (primary, info, danger, success, warning) {
-		.el-button--#{$type}.is-plain {
-			--el-button-text-color: var(--el-color-#{$type}) !important;
-			--el-button-hover-text-color: var(--next-color-white) !important;
-			--el-button-active-text-color: var(--next-color-white) !important;
-			--el-button-disabled-text-color: var(--el-color-#{$type}-light-5) !important;
-			--el-button-bg-color: transparent !important;
-			--el-button-border-color: var(--el-color-#{$type}) !important;
-			--el-button-hover-bg-color: var(--el-color-#{$type}) !important;
-			--el-button-hover-border-color: var(--el-color-#{$type}) !important;
-			--el-button-disabled-bg-color: transparent !important;
-			--el-button-disabled-border-color: var(--el-color-#{$type}-light-5) !important;
-		}
+	.el-button--primary.is-text,
+	.el-button--primary.is-link {
+		--el-button-text-color: var(--el-color-primary) !important;
+		--el-button-hover-text-color: var(--el-color-primary-light-3) !important;
+	}
+	.el-button--info.is-text,
+	.el-button--info.is-link {
+		--el-button-text-color: var(--el-color-info) !important;
+		--el-button-hover-text-color: var(--el-color-info-light-3) !important;
+	}
+	.el-button--danger.is-text,
+	.el-button--danger.is-link {
+		--el-button-text-color: var(--el-color-danger) !important;
+		--el-button-hover-text-color: var(--el-color-danger-light-3) !important;
+	}
+	.el-button--success.is-text,
+	.el-button--success.is-link {
+		--el-button-text-color: var(--el-color-success) !important;
+		--el-button-hover-text-color: var(--el-color-success-light-3) !important;
+	}
+	.el-button--warning.is-text,
+	.el-button--warning.is-link {
+		--el-button-text-color: var(--el-color-warning) !important;
+		--el-button-hover-text-color: var(--el-color-warning-light-3) !important;
 	}
 
 	// drawer
@@ -161,10 +164,6 @@
 	.el-dropdown-menu__item:hover:not(.is-disabled) {
 		background: var(--el-bg-color) !important;
 	}
-	.el-dropdown-menu__item.is-disabled {
-		font-weight: 700 !important;
-	}
-
 	// input
 	.el-input-group__append,
 	.el-input-group__prepend {
@@ -184,14 +183,6 @@
 	}
 
 	// pagination
-	.el-pagination.is-background .el-pager li:not(.disabled).active {
-		color: var(--next-color-white) !important;
-	}
-	.el-pagination.is-background .btn-next,
-	.el-pagination.is-background .btn-prev,
-	.el-pagination.is-background .el-pager li {
-		background-color: var(--next-bg-color);
-	}
 	/*深色模式时分页高亮问题*/
 	.el-pagination.is-background .btn-next.is-active,
 	.el-pagination.is-background .btn-prev.is-active,

@@ -86,6 +86,9 @@ export type AssemblyDiffDetail = {
 // 奇数秒会被舍成相邻偶数秒（±1s，格式限制无法消除），故比对放宽到 ±2 秒视为一致
 const MTIME_TOLERANCE_SECONDS = 2;
 
+// 整包上传的压缩包文件名：一次上传把本次所有待发布模块打进同一个包（同一模块组合多服务器复用一个包，故不带服务器标识）
+const BATCH_ZIP_NAME = "_upload_batch.zip";
+
 // 程序集核对行（每个服务器中每个程序集目录的差异统计）
 export type AssemblyDiffRow = {
 	serverId: number;
@@ -122,7 +125,7 @@ const MODULE_NAMES = {
 };
 
 export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
-	const { printInfoLog, createLogTab, updateTabStatus, withLogTab, updateLogProgress, setLogProgressText, logPrintInfo } = log;
+	const { printInfoLog, updateLogProgress, setLogProgressText, logPrintInfo } = log;
 
 	// 本地发布日志上下文（TFS/Git 生成发布日志使用，与 home 的 generatePublishLog 独立）
 	const generatePublishLog = ref({
@@ -179,8 +182,8 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 		message?: string;
 	};
 	let unlistenBackendRetry: UnlistenFn | null = null;
-	// 同一功能的连续重试合并成一行（重试期间反复提示会刷屏）
-	let retryLogIndex = -1;
+	// 同一功能的连续重试合并成一行（重试期间反复提示会刷屏）；行数裁剪会使下标前移，改用日志行 id 定位
+	let retryLogId = -1;
 	let retryLogKey = "";
 
 	const handleBackendRetry = (payload: BackendRetryPayload) => {
@@ -197,14 +200,16 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			: `${nowDate}  [重试] ${source}第 ${attempt}/${total} 次失败：${message}，已达最大重试次数.`;
 
 		// 未开始任何功能时（重试不在运行上下文内）不打印，避免干扰空闲时的其它命令
-		const logs = logPrintInfo.value;
-		if (willRetry && key === retryLogKey && retryLogIndex >= 0 && logs[retryLogIndex]) {
+		if (willRetry && key === retryLogKey && retryLogId >= 0) {
 			// 连续同一错误：原地更新，避免多行刷屏
-			logs[retryLogIndex].content.value = text;
-			return;
+			const prevLog = logPrintInfo.value.find((l) => l.id === retryLogId);
+			if (prevLog) {
+				prevLog.content.value = text;
+				return;
+			}
 		}
 		// 最终失败用错误色记录，便于「失败日志」汇总；重试中为警告色
-		retryLogIndex = printInfoLog(text.replace(nowDate, ""), willRetry ? "log-warning" : "log-error");
+		retryLogId = printInfoLog(text.replace(nowDate, ""), willRetry ? "log-warning" : "log-error");
 		retryLogKey = willRetry ? key : "";
 	};
 
@@ -220,8 +225,9 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 		fileTotal?: number; // 共几个文件
 	};
 	let unlistenFileProgress: UnlistenFn | null = null;
-	// 进度写入目标：调用下载/压缩前置位、结束后清除（下载与压缩均串行执行，不存在并发串台）
-	let progressTarget: { logIndex: number; tabId?: string } | null = null;
+	// 进度写入目标：调用下载/压缩前置位、结束后清除（下载与压缩均串行执行，不存在并发串台）；
+	// 存日志行 id（printInfoLog 返回），行数裁剪后仍能正确定位
+	let progressTarget: { logId: number } | null = null;
 	// 进度文本前缀（如"已下载 2/5 个文件"），文件计数由调用方维护
 	let progressPrefix = "";
 
@@ -258,12 +264,12 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			const sizeText = total > 0 ? `（${formatBytes(current)} / ${formatBytes(total)}）` : "";
 			text = `${progressPrefix}${countText}${sizeText}`;
 		}
-		setLogProgressText(progressTarget.logIndex, text, progressTarget.tabId);
+		setLogProgressText(progressTarget.logId, text);
 	};
 
 	// 设置进度写入目标
-	const setProgressTarget = (logIndex: number, prefix: string, tabId?: string) => {
-		progressTarget = { logIndex, tabId };
+	const setProgressTarget = (logId: number, prefix: string) => {
+		progressTarget = { logId };
 		progressPrefix = prefix;
 	};
 	// 清除进度写入目标（后续事件不再写入）
@@ -349,6 +355,22 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 		return cmdInvoke("execute_remote_command", args);
 	};
 
+	// PowerShell 单引号字面量转义（路径/内容中的单引号需成对）
+	const escapePowerShellLiteral = (text: string) => text.replace(/'/g, "''");
+	// POSIX 单引号字面量转义（shell 单引号内单引号写成 '\''）
+	const escapePosixLiteral = (text: string) => text.replace(/'/g, `'\\''`);
+	// 组装 Windows 下的 PowerShell 调用（-EncodedCommand 形式）
+	// Windows 经 sshd 默认 shell（GBK 代码页）传中文会乱码，暂存路径/日志内容可能含中文，必须编码后再传
+	const buildPowerShellEncodedCommand = (script: string) => {
+		// -EncodedCommand 期望 UTF-16LE 字节流的 base64（中文均为 BMP 字符，charCodeAt 可安全编码）
+		const utf16leBytes = new Uint8Array(
+			new Uint16Array(Array.from(script).map((c) => c.charCodeAt(0))).buffer
+		);
+		let binary = "";
+		for (let i = 0; i < utf16leBytes.length; i++) binary += String.fromCharCode(utf16leBytes[i]);
+		return `powershell -NoProfile -EncodedCommand ${btoa(binary)}`;
+	};
+
 	/**
 	 * 向服务器日志文件追加一行（写入形式：最后追加新行，内容：[日期时间] + 操作信息）。
 	 * 写日志失败仅打印 warning，不阻断备份/恢复/上传/发布主流程。
@@ -367,18 +389,12 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 		let result;
 		if (params.isWindows) {
 			// 单引号内英文单引号需成对转义（PowerShell 字符串字面量规则）
-			const script = `Add-Content -LiteralPath '${params.logPath.replace(/'/g, "''")}' -Value '${fullLine.replace(/'/g, "''")}' -Encoding UTF8`;
-			// -EncodedCommand 期望 UTF-16LE 字节流的 base64（中文均为 BMP 字符，charCodeAt 可安全编码）
-			const utf16leBytes = new Uint8Array(
-				new Uint16Array(Array.from(script).map((c) => c.charCodeAt(0))).buffer
-			);
-			let binary = "";
-			for (let i = 0; i < utf16leBytes.length; i++) binary += String.fromCharCode(utf16leBytes[i]);
+			const script = `Add-Content -LiteralPath '${escapePowerShellLiteral(params.logPath)}' -Value '${escapePowerShellLiteral(fullLine)}' -Encoding UTF8`;
 			result = await execRemote({
 				username: params.username,
 				password: params.password,
 				server: params.server,
-				command: `powershell -NoProfile -EncodedCommand ${btoa(binary)}`,
+				command: buildPowerShellEncodedCommand(script),
 			});
 		} else {
 			// 单引号字符串内的单引号按 shell 规则转义为 '\''
@@ -573,10 +589,13 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 		serviceName: string,
 		action: "stop" | "start"
 	) => {
+		const actionText = action === "stop" ? "停止" : "启动";
 		const isStop = await isWinServiceStop(username, password, server, serviceName);
 		if (action == "stop" && isStop) return true;
 		if (action == "start" && !isStop) return true;
 
+		const switchStartTime = Date.now();
+		printInfoLog(`执行 sc ${action} "${serviceName}"（${server}）...`);
 		const switchServerResult = await execRemote({
 			username,
 			password,
@@ -585,7 +604,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			...getRetryArgs("service"),
 		});
 		if (switchServerResult.code !== 0) {
-			printInfoLog(switchServerResult.data, "log-error");
+			printInfoLog(`sc ${action} "${serviceName}" 执行失败：${switchServerResult.data}`, "log-error");
 			return false;
 		}
 
@@ -594,15 +613,24 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 		const { startTimeoutSecs, stopTimeoutSecs } = getServiceWaitTimeouts();
 		const timeoutSecs = action === "stop" ? stopTimeoutSecs : startTimeoutSecs;
 		const maxRetries = Math.max(1, Math.ceil((timeoutSecs * 1000) / retryInterval));
+		printInfoLog(`等待服务${actionText}确认（最长 ${timeoutSecs} 秒，每 ${retryInterval / 1000} 秒查询一次）...`);
+		let pollCount = 0;
 		for (let i = 0; i < maxRetries; i++) {
 			await new Promise((resolve) => setTimeout(resolve, retryInterval));
 			if (checkStop()) return false;
+			pollCount++;
 			const stopped = await isWinServiceStop(username, password, server, serviceName);
-			if (action === "stop" && stopped) return true;
-			if (action === "start" && !stopped) return true;
+			if (action === "stop" && stopped) {
+				printInfoLog(`已确认服务${actionText}（轮询 ${pollCount} 次，耗时 ${formatElapsed(Date.now() - switchStartTime)}）`);
+				return true;
+			}
+			if (action === "start" && !stopped) {
+				printInfoLog(`已确认服务${actionText}（轮询 ${pollCount} 次，耗时 ${formatElapsed(Date.now() - switchStartTime)}）`);
+				return true;
+			}
 		}
 
-		printInfoLog(`服务 ${serviceName} ${action === "stop" ? "关闭" : "启动"}超时（已等待 ${timeoutSecs} 秒），请手动检查.`, "log-warning");
+		printInfoLog(`服务 ${serviceName} ${actionText}超时（已等待 ${timeoutSecs} 秒），请手动检查.`, "log-warning");
 		return false;
 	};
 
@@ -614,14 +642,20 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 		serviceName: string,
 		action: "stop" | "start"
 	) => {
+		const switchStartTime = Date.now();
+		printInfoLog(`执行 docker ${action} ${serviceName}（${server}）...`);
 		const switchServerResult = await execRemote({
 			username,
 			password,
 			server,
 			command: `docker ${action} ${serviceName}`,
 		});
-		if (switchServerResult.code !== 0) printInfoLog(switchServerResult.data, "log-error");
-		return switchServerResult.code === 0;
+		if (switchServerResult.code !== 0) {
+			printInfoLog(`docker ${action} ${serviceName} 失败：${switchServerResult.data}`, "log-error");
+			return false;
+		}
+		printInfoLog(`docker ${action} ${serviceName} 完成（耗时 ${formatElapsed(Date.now() - switchStartTime)}）`);
+		return true;
 	};
 
 	// 停止服务实例（按部署环境分流）
@@ -745,10 +779,8 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 				return false;
 			}
 
-			const tabId = createLogTab("备份服务", serverInfo.name || "");
-			updateTabStatus(tabId, "running");
 			const serverStartTime = Date.now();
-			const backupSuccess = await withLogTab(tabId, async () => {
+			const backupSuccess = await (async () => {
 				const uName = serverInfo.account;
 				const uPwd = serverInfo.pwd;
 				const serverAddress = `${serverInfo.ip}:${serverInfo.port}`;
@@ -869,8 +901,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 					"log-success"
 				);
 				return true;
-			});
-			updateTabStatus(tabId, backupSuccess ? "success" : "error");
+			})();
 			if (!backupSuccess) {
 				isSuccess = false;
 				break;
@@ -941,9 +972,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 		for (let srvIdx = 0; srvIdx < wpfServerArr.length; srvIdx++) {
 			if (checkStop()) return false;
 			const wpfServer = wpfServerArr[srvIdx];
-			const tabId = createLogTab("打包wpf", wpfServer.name || "");
-			updateTabStatus(tabId, "running");
-			const packSuccess = await withLogTab(tabId, async () => {
+			const packSuccess = await (async () => {
 				if (!wpfServer.id) {
 					printInfoLog(` ${MODULE_NAMES.wpfClient} 未选择服务或该服务器不存在，请检查.`, "log-error");
 					return false;
@@ -1177,16 +1206,15 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 				"log-success"
 			);
 			return true;
-		});
-			updateTabStatus(tabId, packSuccess ? "success" : "error");
-			if (!packSuccess) {
-				isSuccess = false;
-				break;
-			}
+		})();
+		if (!packSuccess) {
+			isSuccess = false;
+			break;
 		}
-		if (isSuccess) {
-			printInfoLog(`打包wpf总耗时：${formatElapsed(Date.now() - overallStartTime)}。`);
-		}
+	}
+	if (isSuccess) {
+		printInfoLog(`打包wpf总耗时：${formatElapsed(Date.now() - overallStartTime)}。`);
+	}
 		return isSuccess;
 	};
 
@@ -1260,48 +1288,46 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 	};
 
 	/**
-	 * 将模块程序集目录打包为单个 zip（同一模块多服务器复用，避免重复压缩）
+	 * 将本批次所有模块的程序集目录打包为同一个 zip（各模块在包内落成 <模块名>/ 顶层目录）
+	 * 上传后在服务端一次性解压：N 个模块只需 1 次上传 / 1 次解压
+	 * @param sources 打包源（srcDir 本地目录，entry 包内顶层目录名）
 	 * @returns zip 路径；空串=打包失败
 	 */
-	const packModuleZip = async (moduleName: string): Promise<string> => {
-		const moduleDir = `${ctx.assemblyOutPath()}/${moduleName}`;
-		const moduleDirExists = await cmdInvoke("exists", { path: moduleDir });
-		if (moduleDirExists.code !== 0) {
-			printInfoLog(`未找到本地程序集目录：${moduleDir}，请先执行【获取程序集】.`, "log-error");
-			return "";
-		}
-		const zipPath = `${removeSlash(String(ctx.assemblyOutPath()))}/${moduleName}_upload.zip`;
+	const packBatchZip = async (sources: { srcDir: string; entry: string }[]): Promise<string> => {
+		const zipPath = `${removeSlash(String(ctx.assemblyOutPath()))}/${BATCH_ZIP_NAME}`;
 		const zipExists = await cmdInvoke("exists", { path: zipPath });
 		if (zipExists.code === 0) {
 			await cmdInvoke("delete_paths", { paths: [zipPath] });
 		}
-		printInfoLog(`准备上传：${moduleName} 打包为 ${moduleName}_upload.zip（上传后在服务端解压，减少传输与往返）...`);
+		printInfoLog(
+			`准备上传：${sources.map((s) => s.entry).join("、")} 合并打包为 ${BATCH_ZIP_NAME}（上传后在服务端一次性解压）...`
+		);
 		const packStartTime = Date.now();
-		const packLogIndex = printInfoLog(`正在打包 ${moduleName}_upload.zip ...`);
+		const packLogIndex = printInfoLog(`正在打包 ${BATCH_ZIP_NAME} ...`);
 		let packResult: any;
 		setProgressTarget(packLogIndex, "");
 		try {
-			packResult = await cmdInvoke("zip_dir", {
-				srcDir: moduleDir,
-				dstFile: zipPath,
-			});
+			packResult = await cmdInvoke("zip_dirs", { sources, dstFile: zipPath });
 		} finally {
 			clearProgressTarget();
 			setLogProgressText(packLogIndex, "");
 		}
 		if (packResult.code !== 0) {
-			printInfoLog(`打包 ${moduleName}_upload.zip 失败：${packResult.data}.`, "log-error");
+			printInfoLog(`打包 ${BATCH_ZIP_NAME} 失败：${packResult.data}.`, "log-error");
 			return "";
 		}
-		printInfoLog(`已打包 ${moduleName}_upload.zip，耗时 ${formatElapsed(Date.now() - packStartTime)}.`, "log-success");
+		printInfoLog(
+			`已打包 ${BATCH_ZIP_NAME}（${sources.length} 个模块），耗时 ${formatElapsed(Date.now() - packStartTime)}.`,
+			"log-success"
+		);
 		return zipPath;
 	};
 
 	/**
-	 * 打包上传：上传单个 zip 到服务器后远程解压（字节进度）
+	 * 整包上传：上传单个 zip 到服务器后一次性解压到暂存目录根（模块目录由包内顶层目录还原）
 	 * @returns 空串=成功；非空=错误信息（调用方据此回退逐文件上传）
 	 */
-	const uploadAssemblyZip = async (params: {
+	const uploadBatchZip = async (params: {
 		localZipPath: string;
 		remoteZipPath: string;
 		remoteDir: string;
@@ -1312,7 +1338,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 	}): Promise<string> => {
 		const zipName = params.localZipPath.substring(params.localZipPath.lastIndexOf("/") + 1);
 
-		// 上传 zip
+		// 上传整包
 		const uploadLogIndex = printInfoLog(`正在上传 ${zipName} ...`);
 		const zipUploadStartTime = Date.now();
 		let uploadResult: any;
@@ -1338,8 +1364,12 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 		// 服务端解压（Windows 用 PowerShell Expand-Archive，旧版 tar/bsdtar 不支持 zip；Linux 用 unzip）
 		const unzipStartTime = Date.now();
 		const unzipCommand = params.isWindows
-			? `powershell -NoProfile -Command "Expand-Archive -Path '${params.remoteZipPath.replace(/\//g, "\\")}' -DestinationPath '${params.remoteDir.replace(/\//g, "\\")}' -Force"`
-			: `unzip -o '${params.remoteZipPath}' -d '${params.remoteDir}'`;
+			? buildPowerShellEncodedCommand(
+					`Expand-Archive -Path '${escapePowerShellLiteral(params.remoteZipPath.replace(/\//g, "\\"))}' -DestinationPath '${escapePowerShellLiteral(
+						params.remoteDir.replace(/\//g, "\\")
+					)}' -Force`
+				)
+			: `unzip -o '${escapePosixLiteral(params.remoteZipPath)}' -d '${escapePosixLiteral(params.remoteDir)}'`;
 		printInfoLog(`正在服务端解压 ${zipName} 到 ${params.remoteDir} ...`);
 		const unzipResult = await execRemote({
 			username: params.username,
@@ -1355,8 +1385,10 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 
 		// 清理服务端临时 zip（避免污染程序集暂存目录）
 		const deleteCommand = params.isWindows
-			? `powershell -NoProfile -Command "Remove-Item -LiteralPath '${params.remoteZipPath.replace(/\//g, "\\")}' -Force"`
-			: `rm -f '${params.remoteZipPath}'`;
+			? buildPowerShellEncodedCommand(
+					`Remove-Item -LiteralPath '${escapePowerShellLiteral(params.remoteZipPath.replace(/\//g, "\\"))}' -Force`
+				)
+			: `rm -f '${escapePosixLiteral(params.remoteZipPath)}'`;
 		const deleteResult = await execRemote({
 			username: params.username,
 			password: params.password,
@@ -1370,9 +1402,66 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 	};
 
 	/**
-	 * 上传程序集：将本地获取到的程序集上传到服务器的程序集暂存路径
-	 * 目录约定：<暂存路径>/<模块名>/
-	 * 非 WpfClient 模块：本地打包成 zip → 上传 → 服务端解压（节省传输、减少 SFTP 往返）
+	 * 清空服务器上本批次涉及的所有模块暂存目录（先删目录再重建，隐藏文件、多层子目录一并清掉）
+	 * 一条远程命令处理全部模块，避免逐模块往返；供【发布】覆盖前保证暂存目录无历史残留
+	 * @returns ok=false 时 message 为失败原因；cleared 为清掉的条目总数（解析不到为 null）
+	 */
+	const clearRemoteModuleDirs = async (params: {
+		stagingRoot: string;
+		moduleNames: string[];
+		isWindows: boolean;
+		username: string;
+		password: string;
+		server: string;
+	}): Promise<{ ok: boolean; message: string; cleared: number | null }> => {
+		let command: string;
+		if (params.isWindows) {
+			const moduleList = params.moduleNames.map((m) => `'${escapePowerShellLiteral(m)}'`).join(", ");
+			const script = [
+				"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
+				`$base = '${escapePowerShellLiteral(params.stagingRoot)}'`,
+				`$modules = @(${moduleList})`,
+				"$n = 0",
+				"foreach ($m in $modules) {",
+				"  $p = Join-Path $base $m",
+				"  if (Test-Path -LiteralPath $p) {",
+				"    $n += (Get-ChildItem -LiteralPath $p -Force | Measure-Object).Count",
+				"    try { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction Stop } catch { Write-Output ('CLEAR_FAILED ' + $_.Exception.Message); exit 1 }",
+				"  }",
+				"  New-Item -ItemType Directory -Force -Path $p | Out-Null",
+				"}",
+				"Write-Output ('CLEARED ' + $n)",
+			].join("\r\n");
+			command = buildPowerShellEncodedCommand(script);
+		} else {
+			const dirs = params.moduleNames
+				.map((m) => `'${escapePosixLiteral(`${params.stagingRoot}/${m}`)}'`)
+				.join(" ");
+			command =
+				`n=0; for p in ${dirs}; do` +
+				` if [ -d "$p" ]; then n=$((n + $(find "$p" -mindepth 1 -maxdepth 1 | wc -l))); fi;` +
+				` rm -rf "$p" || { echo 'CLEAR_FAILED rm'; exit 1; };` +
+				` mkdir -p "$p" || { echo 'CLEAR_FAILED mkdir'; exit 1; };` +
+				` done; echo "CLEARED $n"`;
+		}
+		const result = await execRemote({
+			username: params.username,
+			password: params.password,
+			server: params.server,
+			command,
+		});
+		if (result.code !== 0) {
+			return { ok: false, message: String(result.data ?? "清空失败"), cleared: null };
+		}
+		// 条目数为日志增强信息，解析不到时降级为不含数量的文案
+		const clearedMatch = String(result.data ?? "").match(/CLEARED\s+(\d+)/);
+		return { ok: true, message: "", cleared: clearedMatch ? Number(clearedMatch[1]) : null };
+	};
+
+	/**
+	 * 上传程序集：把本次要发布的所有模块目录合并为一个压缩包，按服务器一次上传、一次解压
+	 * 目录约定：<暂存路径>/<模块名>/（服务端解压后与逐文件上传的结果完全一致）
+	 * 服务器无解压能力或整包上传失败时，回退为逐模块逐文件上传
 	 */
 	const uploadAssemblies = async () => {
 		resetStopState();
@@ -1383,251 +1472,295 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 		}
 		printInfoLog("");
 
-		// 入口信息
-		const serverCount = modules.reduce((sum, m) => sum + m.serverArr.length, 0);
-		printInfoLog(`上传方式：本地程序集 → 服务器程序集暂存路径（<暂存路径>/<模块名>）`);
-		printInfoLog(`参与模块：${modules.length} 个（${modules.map((m) => m.name).join("、")}），共 ${serverCount} 个上传目标`);
-		const overallStartTime = Date.now();
-
-	let isSuccess = true;
-	// 服务器解压能力探测结果缓存：同一服务器只探测一次（跨模块复用，key = 服务器地址|系统）
-	const unzipSupportCache: Record<string, boolean> = {};
-	for (const module of modules) {
-		if (checkStop()) return false;
-
-		// 非 WpfClient 模块：先探测服务器解压命令，可用才把本地目录打包成一个 zip（一次压缩、多服务器复用），
-		// 上传后在服务端解压；解压命令不可用则直接逐文件上传。
-		// WpfClient 产出本身已是若干 zip + Manifest.xml，再打包无收益，保持逐文件上传
-		const isWpfModule = module.name === MODULE_NAMES.wpfClient;
-		// 惰性创建：确认目标服务器支持解压后才打包
-		let moduleZipPath = "";
-
-		for (const server of module.serverArr) {
-				if (checkStop()) return false;
+		// 按服务器聚合：同一台服务器上的多个模块合并进同一个压缩包，只上传一次
+		const groups: { serverId: number; serverName: string; modules: { module: StepModule }[] }[] = [];
+		const groupIndexOf = new Map<number, number>();
+		for (const module of modules) {
+			for (const server of module.serverArr) {
 				if (!server.id) {
 					printInfoLog(` ${module.name} 未选择服务或该服务器不存在，请检查.`, "log-error");
 					return false;
 				}
-				const serverInfo = await getServerDetail(Number(server.id));
+				const serverId = Number(server.id);
+				const existingIndex = groupIndexOf.get(serverId);
+				if (existingIndex === undefined) {
+					groupIndexOf.set(serverId, groups.length);
+					groups.push({ serverId, serverName: String(server.name ?? ""), modules: [{ module }] });
+				} else {
+					groups[existingIndex].modules.push({ module });
+				}
+			}
+		}
+		if (groups.length < 1) {
+			printInfoLog("应用配置中未找到任何服务器的上传目标，请检查服务配置.", "log-error");
+			return false;
+		}
+
+		// 入口信息
+		printInfoLog(`上传方式：本地程序集合并打包 → 服务器程序集暂存路径（<暂存路径>/<模块名>）`);
+		printInfoLog(
+			`参与模块：${modules.length} 个（${modules.map((m) => m.name).join("、")}），共 ${groups.length} 台服务器（每台 1 次上传 / 1 次解压）`
+		);
+		const overallStartTime = Date.now();
+
+		let isSuccess = true;
+		// 服务器解压能力探测结果缓存：同一服务器只探测一次（key = 服务器地址|系统）
+		const unzipSupportCache: Record<string, boolean> = {};
+		// 整包缓存：key = 打包源签名（模块组合 + 本地目录），同一组合多服务器只压缩一次
+		let batchZip = { key: "", path: "" };
+		const cleanupBatchZip = async () => {
+			if (batchZip.path) {
+				await cmdInvoke("delete_paths", { paths: [batchZip.path] });
+				batchZip = { key: "", path: "" };
+			}
+		};
+
+		try {
+			for (const group of groups) {
+				if (checkStop()) {
+					isSuccess = false;
+					break;
+				}
+				const serverInfo = await getServerDetail(group.serverId);
 				if (!serverInfo) {
-					printInfoLog(`服务[${server.name}]不存在，请检查.`, "log-error");
-					return false;
+					printInfoLog(`服务[${group.serverName}]不存在，请检查.`, "log-error");
+					isSuccess = false;
+					break;
 				}
 				if (!serverInfo.assemblyStagingPath) {
 					printInfoLog(`服务器[${serverInfo.name}]未配置[程序集暂存路径]，请先在服务器管理中配置.`, "log-error");
-					return false;
+					isSuccess = false;
+					break;
 				}
 
-			const tabId = createLogTab(`上传-${module.name}`, serverInfo.name || "");
-			updateTabStatus(tabId, "running");
-			const tabStartTime = Date.now();
-			const uploadSuccess = await withLogTab(tabId, async () => {
-				const uName = serverInfo.account;
-				const uPwd = serverInfo.pwd;
-				const serverAddress = `${serverInfo.ip}:${serverInfo.port}`;
-				const stagingBase = `${removeSlash(String(serverInfo.assemblyStagingPath))}/${module.name}`;
-				printInfoLog(`服务器：${serverInfo.name}（${displayOs(Number(serverInfo.os))} ${serverAddress}）`);
-				printInfoLog(`上传目标：${stagingBase}`);
+				const moduleNames = group.modules.map((m) => m.module.name);
+				const tabStartTime = Date.now();
+				const uploadSuccess = await (async () => {
+					const uName = serverInfo.account;
+					const uPwd = serverInfo.pwd;
+					const serverAddress = `${serverInfo.ip}:${serverInfo.port}`;
+					const stagingRoot = removeSlash(String(serverInfo.assemblyStagingPath));
+					const isWindows = Number(serverInfo.os) === 1;
+					printInfoLog(`服务器：${serverInfo.name}（${displayOs(Number(serverInfo.os))} ${serverAddress}）`);
+					printInfoLog(`上传目标：${stagingRoot}/<${moduleNames.join("|")}>`);
+					printInfoLog(`参与模块：${moduleNames.join("、")}（合并为 1 个压缩包）`);
 
-				// WpfClient 从打包产出目录上传；其余模块从程序集输出目录上传
-				let localDir: string;
-				if (module.name === MODULE_NAMES.wpfClient) {
-					localDir = `${ctx.assemblyOutPath()}/${MODULE_NAMES.wpfClient}/packOutput`;
-				} else {
-					localDir = `${ctx.assemblyOutPath()}/${module.name}`;
-				}
-				printInfoLog(`本地来源：${localDir}`);
-
-				printInfoLog(`步骤 1/5：检查本地目录...`);
-				const localDirExists = await cmdInvoke("exists", { path: localDir });
-					if (localDirExists.code !== 0) {
+					// 步骤 1/6：逐个模块校验本地目录并统计文件
+					printInfoLog(`步骤 1/6：校验本地目录（${moduleNames.length} 个模块）...`);
+					const prepared: { module: StepModule; localDir: string; files: string[] }[] = [];
+					for (const target of group.modules) {
+						if (checkStop()) return false;
+						// WpfClient 从打包产出目录上传；其余模块从程序集输出目录上传
+						const localDir =
+							target.module.name === MODULE_NAMES.wpfClient
+								? `${removeSlash(String(ctx.assemblyOutPath()))}/${MODULE_NAMES.wpfClient}/packOutput`
+								: `${removeSlash(String(ctx.assemblyOutPath()))}/${target.module.name}`;
+						const localDirExists = await cmdInvoke("exists", { path: localDir });
+						if (localDirExists.code !== 0) {
+							printInfoLog(
+								target.module.name === MODULE_NAMES.wpfClient
+									? `未找到本地打包目录：${localDir}，请先执行【打包wpf】.`
+									: `未找到本地程序集目录：${localDir}，请先执行【获取程序集】.`,
+								"log-error"
+							);
+							return false;
+						}
+						const files = await readDirFiles(localDir);
+						if (files.length < 1) {
+							printInfoLog(`本地目录为空：${localDir}`, "log-warning");
+							return false;
+						}
 						printInfoLog(
-							module.name === MODULE_NAMES.wpfClient
-								? `未找到本地打包目录：${localDir}，请先执行【打包wpf】.`
-								: `未找到本地程序集目录：${localDir}，请先执行【获取程序集】.`,
-							"log-error"
+							`${target.module.name}：${files.length} 个文件（${files.slice(0, 5).join("、")}${files.length > 5 ? " 等" : ""}），来源 ${localDir}`
 						);
-						return false;
+						prepared.push({ module: target.module, localDir, files });
 					}
 
-				// 在服务器上创建暂存目录
-				printInfoLog(`步骤 2/5：准备服务器暂存目录（不存在则创建）...`);
-				const mkdirStartTime = Date.now();
-				let mkdirResult;
-				if (serverInfo.os === 1) {
-					mkdirResult = await execRemote({
+					// 步骤 2/6：在服务器上创建暂存目录根（模块目录由步骤 5 清空时一并重建）
+					printInfoLog(`步骤 2/6：准备服务器暂存目录（不存在则创建）...`);
+					const mkdirStartTime = Date.now();
+					const mkdirCommand = isWindows
+						? buildPowerShellEncodedCommand(
+								`New-Item -ItemType Directory -Force -Path '${escapePowerShellLiteral(stagingRoot)}' | Out-Null`
+							)
+						: `mkdir -p '${escapePosixLiteral(stagingRoot)}'`;
+					const mkdirResult = await execRemote({
 						username: uName,
 						password: uPwd,
 						server: serverAddress,
-						command: `powershell -Command "New-Item -ItemType Directory -Force -Path '${stagingBase}' | Out-Null"`,
+						command: mkdirCommand,
 					});
-				} else {
-					mkdirResult = await execRemote({
-						username: uName,
-						password: uPwd,
-						server: serverAddress,
-						command: `mkdir -p '${stagingBase}'`,
-					});
-				}
-				if (mkdirResult.code !== 0) {
-					printInfoLog(`创建暂存目录失败：${mkdirResult.data}`, "log-error");
-					return false;
-				}
-				printInfoLog(`暂存目录就绪，耗时 ${formatElapsed(Date.now() - mkdirStartTime)}.`);
+					if (mkdirResult.code !== 0) {
+						printInfoLog(`创建暂存目录失败：${mkdirResult.data}`, "log-error");
+						return false;
+					}
+					printInfoLog(`暂存目录就绪，耗时 ${formatElapsed(Date.now() - mkdirStartTime)}.`);
 
-			// 准备上传：读取本地文件清单 → 探测服务端解压命令 → 按需本地打包
-			printInfoLog(`步骤 3/5：准备上传（读取本地文件、探测服务器解压命令、本地打包）...`);
-			const uploadStartTime = Date.now();
-			const projectFiles = await readDirFiles(localDir);
-				if (projectFiles.length < 1) {
-					printInfoLog(`本地目录为空：${localDir}`, "log-warning");
-					return false;
-				}
-				printInfoLog(`待上传文件共 ${projectFiles.length} 个（${projectFiles.slice(0, 5).join("、")}${projectFiles.length > 5 ? " 等" : ""}）.`);
-
-				// 非 WpfClient：上传前先探测服务端解压命令，可用才打包上传；不可用直接逐文件上传（不产生无谓的本地压缩）
-				const isWindows = Number(serverInfo.os) === 1;
-				let zipUploadPath = "";
-				if (!isWpfModule) {
+					// 步骤 3/6：探测服务端解压命令（同一服务器一次运行只探测一次）
+					printInfoLog(`步骤 3/6：探测服务器解压命令...`);
 					const unzipCmdName = isWindows ? "PowerShell Expand-Archive" : "unzip";
-					const cacheKey = `${serverAddress}|${isWindows ? "win" : "linux"}`;
-					if (unzipSupportCache[cacheKey] === undefined) {
+					const unzipCacheKey = `${serverAddress}|${isWindows ? "win" : "linux"}`;
+					if (unzipSupportCache[unzipCacheKey] === undefined) {
 						printInfoLog(`检查服务器解压命令（${unzipCmdName}）是否可用...`);
-						unzipSupportCache[cacheKey] = await checkRemoteUnzipAvailable({
+						unzipSupportCache[unzipCacheKey] = await checkRemoteUnzipAvailable({
 							isWindows,
 							username: uName,
 							password: uPwd,
 							server: serverAddress,
 						});
 					}
-					if (!unzipSupportCache[cacheKey]) {
-						printInfoLog(`服务器[${serverInfo.name}]无可用解压命令（${unzipCmdName}），直接逐文件上传.`, "log-warning");
-					} else {
-						// 确认可用后才打包；同模块多服务器复用同一个 zip
-						if (!moduleZipPath) {
-							moduleZipPath = await packModuleZip(module.name);
-							if (!moduleZipPath) return false;
-						}
-						zipUploadPath = moduleZipPath;
+					const canUnzip = unzipSupportCache[unzipCacheKey];
+					if (!canUnzip) {
+						printInfoLog(
+							`服务器[${serverInfo.name}]无可用解压命令（${unzipCmdName}），回退为逐文件上传.`,
+							"log-warning"
+						);
 					}
-				}
 
-				// 清空服务器暂存目录：先删目录再重建空目录（隐藏文件、多层子目录一并清掉），
-				// 避免本地已删除的历史文件残留在暂存目录，被【发布】一并覆盖到服务目录内。
-				// 时机放在本地校验与 zip 打包成功之后：打包失败时不动服务器，保证仍有可发布内容。
-				printInfoLog(`步骤 4/5：清空服务器暂存目录 ${stagingBase} 的原有文件（防止旧文件被发布到服务内）...`);
-				const clearStartTime = Date.now();
-				const clearCommand = isWindows
-					? `powershell -Command "$p='${stagingBase}'; $n=0; if (Test-Path -LiteralPath $p) { $n=(Get-ChildItem -LiteralPath $p -Force | Measure-Object).Count; try { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction Stop } catch { Write-Output ('CLEAR_FAILED ' + $_.Exception.Message); exit 1 } }; New-Item -ItemType Directory -Force -Path $p | Out-Null; Write-Output ('CLEARED ' + $n)"`
-					: `n=0; if [ -d '${stagingBase}' ]; then n=$(find '${stagingBase}' -mindepth 1 -maxdepth 1 | wc -l); fi; rm -rf '${stagingBase}' || { echo 'CLEAR_FAILED rm'; exit 1; }; mkdir -p '${stagingBase}' || { echo 'CLEAR_FAILED mkdir'; exit 1; }; echo "CLEARED $n"`;
-				const clearResult = await execRemote({
-					username: uName,
-					password: uPwd,
-					server: serverAddress,
-					command: clearCommand,
-				});
-				if (clearResult.code !== 0) {
-					printInfoLog(
-						`清空服务器暂存目录 ${stagingBase} 失败：${clearResult.data}（为避免残留旧文件，已中止本次上传）`,
-						"log-error"
-					);
-					return false;
-				}
-				// 条目数为日志增强信息，解析不到时降级为不含数量的文案
-				const clearedMatch = String(clearResult.data ?? "").match(/CLEARED\s+(\d+)/);
-				printInfoLog(
-					clearedMatch
-						? `暂存目录已清空并重建（原有 ${clearedMatch[1]} 个条目），耗时 ${formatElapsed(Date.now() - clearStartTime)}.`
-						: `暂存目录已清空并重建，耗时 ${formatElapsed(Date.now() - clearStartTime)}.`,
-					"log-success"
-				);
+					// 步骤 4/6：本地整包打包（同一模块组合多服务器只压缩一次）
+					let zipUploadPath = "";
+					if (canUnzip) {
+						printInfoLog(`步骤 4/6：本地打包（${moduleNames.length} 个模块 → 1 个压缩包）...`);
+						const sources = prepared.map((item) => ({ srcDir: item.localDir, entry: item.module.name }));
+						const zipKey = sources
+							.map((s) => `${s.entry}|${s.srcDir}`)
+							.sort()
+							.join(";");
+						if (batchZip.path && batchZip.key === zipKey) {
+							zipUploadPath = batchZip.path;
+							printInfoLog(`复用已打包的 ${BATCH_ZIP_NAME}（模块组合与本地来源一致）`, "log-success");
+						} else {
+							await cleanupBatchZip();
+							const packedPath = await packBatchZip(sources);
+							if (!packedPath) return false;
+							batchZip = { key: zipKey, path: packedPath };
+							zipUploadPath = packedPath;
+						}
+					} else {
+						printInfoLog(`步骤 4/6：跳过本地打包（服务器无解压能力，改为逐文件上传）...`);
+					}
+					if (checkStop()) return false;
 
-				printInfoLog(`步骤 5/5：上传文件（本地 ${localDir} → 服务器 ${stagingBase}）...`);
-				let uploadError = "";
-				if (zipUploadPath) {
-					printInfoLog(`采用打包上传：${module.name}_upload.zip → 服务端解压到 ${stagingBase} ...`);
-					uploadError = await uploadAssemblyZip({
-						localZipPath: zipUploadPath,
-						remoteZipPath: `${removeSlash(String(serverInfo.assemblyStagingPath))}/${module.name}_upload.zip`,
-						remoteDir: stagingBase,
+					// 步骤 5/6：清空全部模块暂存目录（一条命令处理，避免逐模块往返）
+					printInfoLog(`步骤 5/6：清空服务器暂存目录的原有文件（防止旧文件被发布到服务内）...`);
+					const clearStartTime = Date.now();
+					const clearResult = await clearRemoteModuleDirs({
+						stagingRoot,
+						moduleNames,
 						isWindows,
 						username: uName,
 						password: uPwd,
 						server: serverAddress,
 					});
-					if (uploadError) {
-						// 手动停止不打印回退提示，直接结束
-						if (checkStop()) return false;
-						printInfoLog(`打包上传失败，回退为逐文件上传：${uploadError}`, "log-warning");
+					if (!clearResult.ok) {
+						printInfoLog(
+							`清空服务器暂存目录 ${stagingRoot} 失败：${clearResult.message}（为避免残留旧文件，已中止本次上传）`,
+							"log-error"
+						);
+						return false;
 					}
-				}
-				if (!zipUploadPath || uploadError) {
-					uploadError = await uploadAssemblyFiles({
-						localDir,
-						remoteDir: stagingBase,
-						files: projectFiles,
-						username: uName,
-						password: uPwd,
-						server: serverAddress,
-					});
-				}
-				if (uploadError) return false;
-				printInfoLog(
-					`已将 ${projectFiles.length} 个文件上传到 ${stagingBase}，耗时 ${formatElapsed(Date.now() - uploadStartTime)}.`,
-					"log-success"
-				);
+					printInfoLog(
+						clearResult.cleared === null
+							? `暂存目录已清空并重建（${moduleNames.length} 个模块），耗时 ${formatElapsed(Date.now() - clearStartTime)}.`
+							: `暂存目录已清空并重建（${moduleNames.length} 个模块，原有 ${clearResult.cleared} 个条目），耗时 ${formatElapsed(
+									Date.now() - clearStartTime
+								)}.`,
+						"log-success"
+					);
 
-				// 写入服务器上传日志：<程序集暂存路径>/上传日志.log
-				// 非 WPF 记录每个模块目录上传的文件个数；WPF 记录具体上传文件及 zip 升级到的版本（解析本地 Manifest.xml）
-				let uploadLogLine = `上传 ${module.name}：${projectFiles.length} 个文件（${stagingBase}）`;
-				if (isWpfModule) {
-					let versionText = "";
-					try {
-						const manifestResult = await cmdInvoke<string>("read_content_to_file", {
-							filePath: `${removeSlash(localDir)}/Manifest.xml`,
+					// 步骤 6/6：一次上传整包 → 一次解压
+					printInfoLog(`步骤 6/6：上传整包并在服务端解压（1 次上传 / 1 次解压）...`);
+					const uploadStartTime = Date.now();
+					let uploadError = "";
+					if (zipUploadPath) {
+						printInfoLog(`采用整包上传：${BATCH_ZIP_NAME} → 服务端解压到 ${stagingRoot} ...`);
+						uploadError = await uploadBatchZip({
+							localZipPath: zipUploadPath,
+							remoteZipPath: `${stagingRoot}/${BATCH_ZIP_NAME}`,
+							remoteDir: stagingRoot,
+							isWindows,
+							username: uName,
+							password: uPwd,
+							server: serverAddress,
 						});
-						if (manifestResult.code === 0 && manifestResult.data) {
-							const versions = new Array<string>();
-							const moduleRegex = /<Module>([\s\S]*?)<\/Module>/g;
-							let match: RegExpExecArray | null;
-							while ((match = moduleRegex.exec(String(manifestResult.data))) !== null) {
-								const name = /<Name>([\s\S]*?)<\/Name>/.exec(match[1])?.[1]?.trim();
-								const version = /<Version>([\s\S]*?)<\/Version>/.exec(match[1])?.[1]?.trim();
-								if (name && version) versions.push(`${name}=${version}`);
-							}
-							if (versions.length > 0) versionText = `；版本：${versions.join("、")}`;
+						if (uploadError) {
+							// 手动停止不打印回退提示，直接结束
+							if (checkStop()) return false;
+							printInfoLog(`整包上传失败，回退为逐文件上传：${uploadError}`, "log-warning");
 						}
-					} catch (error) {
-						printInfoLog(`读取本地 Manifest.xml 版本信息失败，上传日志将不含版本段.`, "log-warning");
 					}
-					uploadLogLine = `上传 ${module.name}：${projectFiles.join("、")}${versionText}`;
-				}
-				await appendRemoteLogLine({
-					isWindows: Number(serverInfo.os) === 1,
-					username: uName,
-					password: uPwd,
-					server: serverAddress,
-					logPath: `${removeSlash(String(serverInfo.assemblyStagingPath))}/上传日志.log`,
-					line: uploadLogLine,
-				});
+					if (!zipUploadPath || uploadError) {
+						for (const item of prepared) {
+							uploadError = await uploadAssemblyFiles({
+								localDir: item.localDir,
+								remoteDir: `${stagingRoot}/${item.module.name}`,
+								files: item.files,
+								username: uName,
+								password: uPwd,
+								server: serverAddress,
+							});
+							if (uploadError) break;
+						}
+					}
+					if (uploadError) return false;
+					const totalFiles = prepared.reduce((sum, item) => sum + item.files.length, 0);
+					printInfoLog(
+						`已将 ${moduleNames.length} 个模块共 ${totalFiles} 个文件上传到 ${stagingRoot}，耗时 ${formatElapsed(
+							Date.now() - uploadStartTime
+						)}.`,
+						"log-success"
+					);
 
-				printInfoLog(
-					`[上传-${module.name}] ${serverInfo.name} 完成，总耗时 ${formatElapsed(Date.now() - tabStartTime)}.`,
-					"log-success"
-				);
-				return true;
-				});
-				updateTabStatus(tabId, uploadSuccess ? "success" : "error");
+					// 写入服务器上传日志：<程序集暂存路径>/上传日志.log（按模块逐行记录）
+					// 非 WPF 记录每个模块目录上传的文件个数；WPF 记录具体上传文件及 zip 升级到的版本（解析本地 Manifest.xml）
+					for (const item of prepared) {
+						let uploadLogLine = `上传 ${item.module.name}：${item.files.length} 个文件（${stagingRoot}/${item.module.name}）`;
+						if (item.module.name === MODULE_NAMES.wpfClient) {
+							let versionText = "";
+							try {
+								const manifestResult = await cmdInvoke<string>("read_content_to_file", {
+									filePath: `${removeSlash(item.localDir)}/Manifest.xml`,
+								});
+								if (manifestResult.code === 0 && manifestResult.data) {
+									const versions = new Array<string>();
+									const moduleRegex = /<Module>([\s\S]*?)<\/Module>/g;
+									let match: RegExpExecArray | null;
+									while ((match = moduleRegex.exec(String(manifestResult.data))) !== null) {
+										const name = /<Name>([\s\S]*?)<\/Name>/.exec(match[1])?.[1]?.trim();
+										const version = /<Version>([\s\S]*?)<\/Version>/.exec(match[1])?.[1]?.trim();
+										if (name && version) versions.push(`${name}=${version}`);
+									}
+									if (versions.length > 0) versionText = `；版本：${versions.join("、")}`;
+								}
+							} catch (error) {
+								printInfoLog(`读取本地 Manifest.xml 版本信息失败，上传日志将不含版本段.`, "log-warning");
+							}
+							uploadLogLine = `上传 ${item.module.name}：${item.files.join("、")}${versionText}`;
+						}
+						await appendRemoteLogLine({
+							isWindows: Number(serverInfo.os) === 1,
+							username: uName,
+							password: uPwd,
+							server: serverAddress,
+							logPath: `${stagingRoot}/上传日志.log`,
+							line: uploadLogLine,
+						});
+					}
+
+					printInfoLog(
+						`[上传-${moduleNames.join("、")}] ${serverInfo.name} 完成，总耗时 ${formatElapsed(Date.now() - tabStartTime)}.`,
+						"log-success"
+					);
+					return true;
+				})();
 				if (!uploadSuccess) {
 					isSuccess = false;
 					break;
 				}
 			}
-			// 清理本地临时 zip（成功、失败、停止都清理）
-			if (moduleZipPath) {
-				await cmdInvoke("delete_paths", { paths: [moduleZipPath] });
-			}
-			if (!isSuccess) break;
+		} finally {
+			// 清理本地整包（成功、失败、停止都清理）
+			await cleanupBatchZip();
 		}
 		if (isSuccess) {
 			printInfoLog(`上传程序集总耗时：${formatElapsed(Date.now() - overallStartTime)}。`);
@@ -1672,9 +1805,11 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 				const serverInfo = await getServerDetail(ins.serverId);
 				if (!serverInfo) {
 					status = { statusText: "服务器不存在", running: null };
+					printInfoLog(`服务状态查询：服务器(ID:${ins.serverId})不存在`, "log-error");
 				} else {
 					const serverAddress = `${serverInfo.ip}:${serverInfo.port}`;
 					if (serverInfo.os === 1) {
+						printInfoLog(`查询服务状态：${serverInfo.name}（${serverAddress}，${displayOs(Number(serverInfo.os))}）sc query "${ins.identity}"`);
 						const queryResult = await execRemote({
 							username: serverInfo.account,
 							password: serverInfo.pwd,
@@ -1684,14 +1819,17 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 						const output = String(queryResult.data || "");
 						if (queryResult.code !== 0) {
 							status = { statusText: "查询失败", running: null };
+							printInfoLog(`服务状态查询失败：${serverInfo.name} / ${ins.identity}：${queryResult.data}`, "log-error");
 						} else if (output.includes("RUNNING")) {
 							status = { statusText: "运行中", running: true };
 						} else if (output.includes("STOPPED")) {
 							status = { statusText: "已停止", running: false };
 						} else {
 							status = { statusText: "未找到服务", running: null };
+							printInfoLog(`服务状态查询：${serverInfo.name} 未找到服务 ${ins.identity}`, "log-warning");
 						}
 					} else if (serverInfo.os === 2) {
+						printInfoLog(`查询服务状态：${serverInfo.name}（${serverAddress}，${displayOs(Number(serverInfo.os))}）docker inspect ${ins.identity}`);
 						const queryResult = await execRemote({
 							username: serverInfo.account,
 							password: serverInfo.pwd,
@@ -1701,6 +1839,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 						const output = String(queryResult.data || "").trim();
 						if (queryResult.code !== 0 || !output) {
 							status = { statusText: "未找到容器", running: null };
+							printInfoLog(`服务状态查询：${serverInfo.name} 未找到容器 ${ins.identity}`, "log-warning");
 						} else if (output === "running") {
 							status = { statusText: "运行中", running: true };
 						} else if (output === "exited" || output === "dead") {
@@ -1710,6 +1849,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 						}
 					} else {
 						status = { statusText: `未知环境(${displayOs(Number(serverInfo.os))})`, running: null };
+						printInfoLog(`服务状态查询：${serverInfo.name} 为未知部署环境（${displayOs(Number(serverInfo.os))}）`, "log-error");
 					}
 				}
 				statusCache.set(cacheKey, status);
@@ -1722,6 +1862,16 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 				statusText: status.statusText,
 				running: status.running,
 			});
+		}
+
+		// 结束汇总
+		if (rows.length > 0) {
+			const runningCount = rows.filter((r) => r.running === true).length;
+			const stoppedCount = rows.filter((r) => r.running === false).length;
+			const unknownCount = rows.length - runningCount - stoppedCount;
+			printInfoLog(
+				`服务状态查询完成：${rows.length} 个实例（运行中 ${runningCount} / 已停止 ${stoppedCount} / 未知 ${unknownCount}）`
+			);
 		}
 
 		result.code = hasError ? 1 : 0;
@@ -1829,14 +1979,17 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			const serverInfo = await getServerDetail(serverId);
 			if (!serverInfo) {
 				errorMsg += `服务[ID:${serverId}]不存在；`;
+				printInfoLog(`服务[ID:${serverId}]不存在，跳过读取.`, "log-error");
 				continue;
 			}
 			if (!serverInfo.assemblyStagingPath) {
 				errorMsg += `服务器[${serverInfo.name}]未配置[程序集暂存路径]；`;
+				printInfoLog(`服务器[${serverInfo.name}]未配置[程序集暂存路径]，跳过读取.`, "log-error");
 				continue;
 			}
 			const stagingBase = removeSlash(String(serverInfo.assemblyStagingPath));
 			const serverAddress = `${serverInfo.ip}:${serverInfo.port}`;
+			printInfoLog(`读取服务器程序集清单：${serverInfo.name}（${serverAddress}，${displayOs(Number(serverInfo.os))}）${stagingBase}`);
 
 			let queryResult;
 			if (serverInfo.os === 1) {
@@ -1848,7 +2001,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 					command: cmd,
 				});
 			} else {
-				const cmd = `cd '${stagingBase}' 2>/dev/null || exit 1; for d in */; do name="\${d%/}"; all=$(find "$d" -type f -printf '%T@|%TY-%Tm-%Td %TH:%TM:%TS|%p\\n' 2>/dev/null | sort -n); if [ -n "$all" ]; then newest=$(printf '%s\\n' "$all" | tail -1); oldest=$(printf '%s\\n' "$all" | head -1); nt=$(printf '%s' "$newest" | cut -d'|' -f2 | cut -d. -f1); np=$(printf '%s' "$newest" | cut -d'|' -f3-); ot=$(printf '%s' "$oldest" | cut -d'|' -f2 | cut -d. -f1); op=$(printf '%s' "$oldest" | cut -d'|' -f3-); echo "$name|$np|$nt|$op|$ot"; else echo "$name|||"; fi; done`;
+				const cmd = `cd '${stagingBase}' 2>/dev/null || exit 1; for d in */; do name="\${d%/}"; all=$(find "$d" -type f -printf '%T@|%TY-%Tm-%Td %TH:%TM:%TS|%p\\n' 2>/dev/null | sort -n); if [ -n "$all" ]; then newest=$(printf '%s\\n' "$all" | tail -1); oldest=$(printf '%s\\n' "$all" | head -1); nt=$(printf '%s' "$newest" | cut -d'|' -f2 | cut -d. -f1); np=$(printf '%s' "$newest" | cut -d'|' -f3-); np="\${np##*/}"; ot=$(printf '%s' "$oldest" | cut -d'|' -f2 | cut -d. -f1); op=$(printf '%s' "$oldest" | cut -d'|' -f3-); op="\${op##*/}"; echo "$name|$np|$nt|$op|$ot"; else echo "$name|||"; fi; done`;
 				queryResult = await execRemote({
 					username: serverInfo.account,
 					password: serverInfo.pwd,
@@ -1858,12 +2011,14 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			}
 			if (queryResult.code !== 0) {
 				errorMsg += `服务器[${serverInfo.name}]读取暂存路径失败：${queryResult.data}；`;
+				printInfoLog(`服务器[${serverInfo.name}]读取暂存路径失败：${queryResult.data}`, "log-error");
 				continue;
 			}
 			const output = String(queryResult.data || "");
 			const serverRows = parseAssemblyOutput(output, serverInfo.name || "");
 			if (serverRows.length < 1) {
 				errorMsg += `服务器[${serverInfo.name}]暂存路径为空或无子目录；`;
+				printInfoLog(`服务器[${serverInfo.name}]暂存路径为空或无子目录.`, "log-warning");
 				continue;
 			}
 			rows.push(...serverRows);
@@ -2002,6 +2157,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			result.msg = "应用配置中未找到任何服务器，请检查应用配置.";
 			return result;
 		}
+		printInfoLog(`开始核对程序集：本机 ${localMap.size} 个文件，${serverItems.length} 台服务器`);
 
 		const rows: AssemblyDiffRow[] = [];
 		let errorMsg = "";
@@ -2018,16 +2174,19 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			const serverInfo = await getServerDetail(serverId);
 			if (!serverInfo) {
 				errorMsg += `服务器[ID:${serverId}]不存在；`;
+				printInfoLog(`服务器[ID:${serverId}]不存在，跳过核对.`, "log-error");
 				continue;
 			}
 			if (!serverInfo.assemblyStagingPath) {
 				errorMsg += `服务器[${serverInfo.name}]未配置[程序集暂存路径]，请先在服务器管理中配置；`;
+				printInfoLog(`服务器[${serverInfo.name}]未配置[程序集暂存路径]，跳过核对.`, "log-error");
 				continue;
 			}
 			const stagingBase = removeSlash(String(serverInfo.assemblyStagingPath));
 			const serverAddress = `${serverInfo.ip}:${serverInfo.port}`;
 
 			// 服务器程序集清单（一次递归列出全部文件）
+			printInfoLog(`读取服务器程序集清单：${serverInfo.name}（${serverAddress}，${displayOs(Number(serverInfo.os))}）${stagingBase}`);
 			let queryResult;
 			if (serverInfo.os === 1) {
 				queryResult = await execRemote({
@@ -2046,9 +2205,11 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			}
 			if (queryResult.code !== 0) {
 				errorMsg += `服务器[${serverInfo.name}]读取程序集暂存路径失败：${queryResult.data}；`;
+				printInfoLog(`服务器[${serverInfo.name}]读取程序集暂存路径失败：${queryResult.data}`, "log-error");
 				continue;
 			}
 			const serverMap = parseFileListOutput(String(queryResult.data || ""));
+			printInfoLog(`服务器[${serverInfo.name}]共 ${serverMap.size} 个文件，开始逐模块比对...`);
 
 			// 逐模块比对（仅核对会上传到该服务器的模块）
 			for (const module of modules) {
@@ -2075,6 +2236,12 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 						module.name === MODULE_NAMES.wpfClient
 							? `服务器[${serverInfo.name}]未找到本机打包目录 ${localBase}/${localPrefix.replace(/\/$/, "")}，请先执行【打包WPF】；`
 							: `服务器[${serverInfo.name}]未找到本机程序集目录 ${localBase}/${module.name}，请先执行【获取程序集】；`;
+					printInfoLog(
+						module.name === MODULE_NAMES.wpfClient
+							? `未找到本机打包目录 ${localBase}/${localPrefix.replace(/\/$/, "")}，请先执行【打包WPF】.`
+							: `未找到本机程序集目录 ${localBase}/${module.name}，请先执行【获取程序集】.`,
+						"log-error"
+					);
 					continue;
 				}
 
@@ -2140,6 +2307,18 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 				a.moduleName.localeCompare(b.moduleName)
 		);
 
+		// 结束汇总
+		if (rows.length > 0) {
+			const diffRows = rows.filter((r) => !r.consistent).length;
+			const missingTotal = rows.reduce((sum, r) => sum + r.missingCount, 0);
+			const timeDiffTotal = rows.reduce((sum, r) => sum + r.timeDiffCount, 0);
+			const extraTotal = rows.reduce((sum, r) => sum + r.extraCount, 0);
+			printInfoLog(
+				`核对完成：共 ${rows.length} 行，差异 ${diffRows} 行（缺失 ${missingTotal} / 时间不一致 ${timeDiffTotal} / 服务器多出 ${extraTotal}）`,
+				diffRows > 0 ? "log-warning" : "log-success"
+			);
+		}
+
 		result.code = rows.length > 0 ? 0 : 1;
 		result.msg = rows.length > 0 ? errorMsg : errorMsg || "未查询到可核对的程序集";
 		result.data = rows;
@@ -2181,14 +2360,17 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			const serverInfo = await getServerDetail(serverId);
 			if (!serverInfo) {
 				errorMsg += `服务[ID:${serverId}]不存在；`;
+				printInfoLog(`服务[ID:${serverId}]不存在，跳过读取.`, "log-error");
 				continue;
 			}
 			if (!serverInfo.serviceBackupPath) {
 				errorMsg += `服务器[${serverInfo.name}]未配置[服务备份路径]；`;
+				printInfoLog(`服务器[${serverInfo.name}]未配置[服务备份路径]，跳过读取.`, "log-error");
 				continue;
 			}
 			const backupBase = removeSlash(String(serverInfo.serviceBackupPath));
 			const serverAddress = `${serverInfo.ip}:${serverInfo.port}`;
+			printInfoLog(`读取服务备份清单：${serverInfo.name}（${serverAddress}，${displayOs(Number(serverInfo.os))}）${backupBase}`);
 
 			let queryResult;
 			if (serverInfo.os === 1) {
@@ -2210,6 +2392,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			}
 			if (queryResult.code !== 0) {
 				errorMsg += `服务器[${serverInfo.name}]读取服务备份路径失败：${queryResult.data}；`;
+				printInfoLog(`服务器[${serverInfo.name}]读取服务备份路径失败：${queryResult.data}`, "log-error");
 				continue;
 			}
 			const lines = String(queryResult.data || "")
@@ -2218,6 +2401,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 				.filter((l) => l.includes("|"));
 			if (lines.length < 1) {
 				errorMsg += `服务器[${serverInfo.name}]服务备份路径为空或无备份文件夹；`;
+				printInfoLog(`服务器[${serverInfo.name}]服务备份路径为空或无备份文件夹.`, "log-warning");
 				continue;
 			}
 			for (const line of lines) {
@@ -2482,11 +2666,8 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			for (const ins of serverInstances) {
 				// 停止检查：实例一旦开始发布则完整执行（停止→替换→启动），避免留下已停止的服务
 				if (checkStop()) return false;
-				// 每个服务实例一个日志标签页
-				const tabId = createLogTab(ins.module, serverInfo.name || "", ins.identity || "files");
-				updateTabStatus(tabId, "running");
 				const instanceStartTime = Date.now();
-				const instanceSuccess = await withLogTab(tabId, async () => {
+				const instanceSuccess = await (async () => {
 					const uName = serverInfo.account;
 					const uPwd = serverInfo.pwd;
 					const serverAddress = `${serverInfo.ip}:${serverInfo.port}`;
@@ -2602,8 +2783,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 					line: `发布成功 ${targetText}`,
 				});
 				return true;
-			});
-				updateTabStatus(tabId, instanceSuccess ? "success" : "error");
+			})();
 				if (!instanceSuccess) {
 					isSuccess = false;
 					break;

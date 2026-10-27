@@ -5,215 +5,27 @@
         <template #title>第一次使用？看一遍下面内容即可上手。核心流程只有四步：获取程序集 → 打包WPF → 上传程序集 → 发布。</template>
       </el-alert>
 
-      <el-collapse v-model="activeNames">
-        <!-- 快速上手 -->
-        <el-collapse-item name="quick">
-          <template #title><span class="help-title">一、快速上手（第一次使用照着做）</span></template>
-          <div class="help-section">
-            <p><b>第 0 步：一次性基础配置</b>（配置过可跳过，都在左侧菜单）</p>
-            <ol>
-              <li><b>服务器管理</b>：添加服务器（IP、账号、密码、系统类型）。如需备份服务，配置【服务备份路径】；如需上传程序集，配置【程序集暂存路径】。操作列的【查看日志】【下载日志】可选择备份 / 恢复 / 上传 / 发布，查看对应日志的最新 100 行或下载到本机（日志文件分别位于服务备份路径、程序集暂存路径下，由本页的备份 / 恢复 / 上传 / 发布操作自动写入，见「四、日志信息区域」）。</li>
-              <li><b>TFS / Git</b>：配置版本库连接（含本地源码路径），获取程序集时要用。</li>
-              <li><b>项目管理</b>：添加项目并设置【程序集输出路径】（本机存放待发布文件的地方）。</li>
-              <li><b>应用配置</b>：选择项目与环境（Dev/Uat/Pro/Other），配置各模块的客户端生成路径、服务器、服务标识（Windows 服务名或 Docker 容器名）与发布路径。</li>
-            </ol>
-            <p><b>日常发布四步</b>（【获取程序集】【打包WPF】在顶部【程序集管理】下拉菜单中，鼠标悬停展开）：</p>
-            <ol>
-              <li>【获取程序集】：根据 TFS/Git 变更或 DLL 名称，把要发布的 DLL 复制到本机程序集输出路径。</li>
-              <li>【打包WPF】：从服务器下载 WPF 压缩包，合并本地最新文件后重新打包并更新版本号。</li>
-              <li>【上传程序集】：把本机程序集上传到各服务器的程序集暂存路径。</li>
-              <li>【发布】：逐个服务「停止服务 → 用暂存程序集替换发布目录 → 启动服务」。</li>
-            </ol>
-            <p>如需发布前留底，先执行【备份】再发布。</p>
-          </div>
-        </el-collapse-item>
-
-        <!-- 功能按钮说明 -->
-        <el-collapse-item name="functions">
-          <template #title><span class="help-title">二、顶部功能按钮说明</span></template>
-          <div class="help-section">
-            <p><b>顶部平铺按钮</b>：上传程序集、发布、备份、备份管理、服务管理。</p>
-            <p><b>程序集管理</b>（下拉菜单，鼠标悬停展开）：获取程序集、打包WPF、查看服务端程序集、查看本机程序集、核对程序集。鼠标悬停任一按钮可显示其作用说明。</p>
-            <p><b>最新产物检查</b>：【获取程序集】【上传程序集】【打包WPF】执行前会先检查本机程序集目录（获取＝各模块客户端生成路径；上传＝程序集输出路径下对应模块目录，WpfClient 查 packOutput；打包＝WpfClient 各生成目录）是否有「最新时间阈值」内修改的文件；没有时弹窗列出各目录最新修改时间，确认后才会继续，防止拿旧产物发布。阈值在发布信息卡设置（1~1440 分钟，默认 10，保存在本机）；检查异常不会阻断操作。</p>
-            <p class="group-label">── 「程序集管理」下拉菜单子功能 ──</p>
-            <h4>获取程序集</h4>
-            <ul>
-              <li><b>作用</b>：确定本次要发布的文件清单，并把文件复制到本机【程序集输出路径】。</li>
-              <li><b>获取方式</b>（应用配置中设置）：
-                <ul>
-                  <li>TFS：按变更集 / 日期 / 最近时间查历史</li>
-                  <li>Git：按提交 / 日期 / 最近时间查历史</li>
-                  <li>DLL名称：按名称匹配</li>
-                  <li>当天 / 最近3天 / 日期范围：按文件修改时间筛选</li>
-                  <li>全部：整目录复制</li>
-                </ul>
-              </li>
-              <li><b>获取范围</b>：TFS/Git 的三种模式——<b>日期</b>（手填起止时间）、<b>变更集/commit</b>（手填起止号）、<b>最近时间</b>（填天数，如 3 表示最近 3 天；每次点击获取时按当天动态计算起止范围，不用手改配置）。</li>
-              <li><b>日志</b>：会显示获取方式、获取范围（如「日期：2026-10-01 00:00:00 ~ 至今」、「最近时间：最近 3 天（… ~ …，每次获取动态计算）」）、每个模块的复制进度（单行刷新）。同一 TFS/Git 配置一次运行只查询一次，重复模块会提示「已复用查询结果」。</li>
-              <li>若应用配置勾选了【生成发布日志】，会在程序集输出路径生成 <code>SMOM发布日志_时间.log</code>。</li>
-            </ul>
-            <h4>打包wpf</h4>
-            <ul>
-              <li><b>作用</b>：为 WpfClient 生成发布包，仅打包到本地不上传。</li>
-              <li><b>流程</b>（4 步）：准备本地打包目录 → 从服务器下载远程 zip → 解压、合并本地生成目录、重新打包、更新 Manifest.xml 中各模块版本号（自动+1）→ 完成。</li>
-              <li><b>进度</b>：下载阶段按文件计数（<code>第 n/N 个</code>）并显示已传输字节百分比；压缩阶段显示「已压缩 x/N 个文件」；都在同一行日志实时刷新。</li>
-            </ul>
-            <h4>查看服务端程序集 / 查看本机程序集</h4>
-            <ul>
-              <li>分别列出服务器【程序集暂存路径】与本机【程序集输出路径】下各模块目录中<b>最新文件</b>与<b>最旧文件</b>的文件名和修改时间，用于核对程序集是否为新。</li>
-            </ul>
-            <h4>核对程序集</h4>
-            <ul>
-              <li><b>作用</b>：上传后核对各服务器上的程序集是否与本地一致。以<b>本机程序集</b>为准，逐文件比对各服务器【程序集暂存路径】对应模块目录中文件的修改时间。</li>
-              <li><b>差异项</b>（以本机为准）：
-                <ul>
-                  <li>服务器缺失文件：本地有、服务器无。</li>
-                  <li>时间不一致：同名文件双方修改时间相差超过 2 秒（打包上传路径的 zip 时间戳只有 2 秒精度，奇数秒文件解压后可能差 1 秒，属正常现象，已在比对中放宽容差；统一按 UTC 比对，不受服务器时区影响）。</li>
-                  <li>服务器多出的文件：本地已删除、服务器暂存目录仍存在。<b>同样视为差异</b>，计入差异合计（这类文件若不清掉，发布时会被一起覆盖到服务目录，可用【上传程序集】清空重建来消除）。</li>
-                </ul>
-              </li>
-              <li><b>展示</b>：每个服务器每个模块目录一行（双方文件数、缺失数、时间不一致数、服务器多出数、差异合计），默认开启「仅看差异」过滤一致行；展开行可查看逐文件差异明细。</li>
-              <li><b>提示</b>：历史上传的文件时间仍是上传时刻，会报时间不一致——重新执行【上传程序集】即可校正（现在上传会保留本地修改时间）。</li>
-            </ul>
-            <p class="group-label">── 顶部平铺按钮功能 ──</p>
-            <h4>上传程序集</h4>
-            <ul>
-              <li><b>作用</b>：把本机程序集输出路径的内容上传到各服务器的【程序集暂存路径】（子目录按模块名组织）。</li>
-              <li><b>流程</b>（5 步）：检查本地目录 → 创建服务器暂存目录 → 准备上传（探测解压命令 / 本地打包）→ <b>清空服务器暂存目录</b> → 上传文件（带实时进度）。</li>
-              <li><b>清空规则</b>：上传前会把服务器上 <code>&lt;程序集暂存路径&gt;/&lt;模块名&gt;</code> 整个目录删除并重建为空目录（原有条目数会写进日志），确保服务器上的程序集与本次本地内容完全一致；本地已删除的旧文件因此不会在【发布】时被覆盖到服务内。清空发生在本地打包成功之后，打包失败不会动服务器上的程序集。</li>
-              <li><b>上传方式</b>：
-                <ul>
-                  <li>非 WpfClient 模块：本地先打包成一个 zip，只上传这一个文件，到服务端再解压到暂存目录（一次压缩、多服务器复用），减少传输量与服务往返；上传时显示字节百分比进度。</li>
-                  <li>WpfClient：产出本身已是若干 zip + Manifest.xml，保持逐文件上传，同样显示进度。</li>
-                  <li>服务端解压依赖 Linux 的 unzip 或 Windows 的 PowerShell（Expand-Archive）：上传前会先探测该命令，不可用则直接逐文件上传（不会白白压缩）；上传/解压中途失败也会自动回退为逐文件上传，不影响结果。</li>
-                </ul>
-              </li>
-              <li><b>文件时间</b>：两种上传方式都保留本地文件修改时间，【核对程序集】可直接比对。</li>
-            </ul>
-            <h4>发布</h4>
-            <ul>
-              <li><b>作用</b>：把暂存路径的程序集发布到各服务实例。每个实例固定三步：<b>停止服务 → 替换程序集（暂存目录/模块 → 发布路径）→ 启动服务</b>。</li>
-              <li>实例一旦开始执行就会完整执行三步（避免留下停了却没替换的服务）；未开始的实例会被跳过。</li>
-              <li><b>发布顺序</b>：按设置页「发布顺序」逐个实例处理，默认 <code>WebApiHost → WebClient → ScheduleServer → WpfClient → SpcMonitor</code>；备份、上传程序集、服务状态查询使用同一顺序。</li>
-              <li><b>启停等待超时</b>：启动、停止后轮询确认状态的最长等待在设置页配置（默认各 20 秒），超时即判定该实例失败并中止本次发布，不会长时间卡住。</li>
-              <li><b>发布日志</b>：每个实例向 <code>&lt;程序集暂存路径&gt;/发布日志.log</code> 写入「发布开始 / 发布成功 / 发布失败（原因）」，失败原因会写明是关闭服务、替换程序集、启动服务还是部署环境不匹配，可在服务器管理页【查看日志】直接回查。</li>
-              <li>每个服务器实例有独立日志标签页，替换失败会给出恢复提示。</li>
-            </ul>
-            <h4>备份</h4>
-            <ul>
-              <li><b>作用</b>：发布前把服务目录整目录拷贝到服务器【服务备份路径】下，留底以便回退。</li>
-              <li><b>规则</b>：
-                <ul>
-                  <li>备份文件夹按<b>年月日时分</b>命名（如 <code>202610242159</code>）。</li>
-                  <li>已存在则先清空内容再备份（防止残留已删除文件）。</li>
-                  <li>内部子文件夹默认用目录名，仅重名时拼接上级目录区分（如服务路径 <code>x/y/A</code> 备份为 <code>202610242159/y_A</code>）。</li>
-                </ul>
-              </li>
-              <li><b>流程</b>（3 步）：准备备份文件夹（创建+清空）→ 逐个服务整目录拷贝 → 更新备份文件夹修改时间为当前时间（便于识别备份时间）。</li>
-            </ul>
-            <h4>备份管理</h4>
-            <ul>
-              <li><b>展示内容</b>：每台服务器备份目录中<b>按名称降序前 10 个</b>备份文件夹，包含文件夹名称、备份时间（文件夹修改时间）、内部备份的服务明细。</li>
-            </ul>
-            <p>每行提供两个操作：</p>
-            <ul>
-              <li>
-                <b>恢复</b>：
-                <ul>
-                  <li>选择该日期备份下的服务文件夹与要恢复的服务，可开启「自动匹配」按目录名联动。</li>
-                  <li>确定后执行：停止服务 → 替换文件 → 启动服务。</li>
-                  <li>WpfClient 替换备份中的全部文件，其余服务仅替换一级目录中的 DLL。</li>
-                </ul>
-              </li>
-              <li><b>删除</b>：将该备份文件夹及其内容从服务器上删除；需二次确认，删除后不可恢复。</li>
-            </ul>
-            <p>没有数据？请先执行【备份】或在服务器管理中配置【服务备份路径】。</p>
-            <h4>服务管理</h4>
-            <ul>
-              <li>列出应用配置中所有带服务标识的实例的运行状态（Windows 服务 / Docker 容器）。</li>
-              <li>支持<b>单行</b>与<b>批量</b>的停止、启动、重启（重启=先停止等完全停止再启动）。</li>
-              <li>操作方式：勾选行后点顶部批量按钮，或直接点行内按钮；操作前有确认框，完成后自动刷新状态。</li>
-              <li>操作日志记录在「总体日志」；状态未知（未找到服务/容器）的行不可操作。</li>
-            </ul>
-          </div>
-        </el-collapse-item>
-
-        <!-- 发布信息区域 -->
-        <el-collapse-item name="info">
-          <template #title><span class="help-title">三、发布信息区域</span></template>
-          <div class="help-section">
-            <ul>
-              <li><b>项目 / 环境选择</b>：决定本页所有功能操作哪套配置。项目与环境记忆都在本地，下次打开自动恢复上次的选择（上次选的项目被删除时回退默认项目）；切到其它页签再回来不会重新查询，保持页面状态。</li>
-              <li><b>程序集输出路径</b>：来自项目管理配置，点击可打开本机目录。</li>
-              <li><b>发布信息(N)</b>：卡片标题中的数字为当前应用配置的应用类型模块数量，增删模块后实时变化。</li>
-              <li><b>最新时间阈值</b>：获取 / 上传程序集、打包WPF 前检查本机程序集目录是否有该分钟数内修改的新文件（默认 10 分钟），没有时确认后才继续。</li>
-              <li><b>获取方式 / 获取范围</b>：来自应用配置，决定获取程序集的行为；TFS/Git 方式会显示配置的范围（日期/变更集/commit）。</li>
-              <li><b>生成发布日志</b>：开启后获取程序集时生成日志文件，生成方式四种：
-                <ul>
-                  <li><b>默认</b>：逐变更集列出用户/日期/DLL/更新内容（给自己或运维核对）。</li>
-                  <li><b>仅发布内容</b>：只有更新说明清单（适合发给业务/客户）。</li>
-                  <li><b>按日期</b>：同一天的变更归组并汇总 DLL。</li>
-                  <li><b>按用户</b>：按提交人归组并汇总 DLL。</li>
-                </ul>
-                「生成信息包含」勾选项决定各方式输出哪些字段；勾选 DLL 文件时需要到本机源码解析 csproj，会慢一些。
-              </li>
-              <li><b>修改应用配置</b>：打开应用配置弹窗编辑当前配置；弹窗内切换项目管理会自动加载对应项目的已有配置。改完保存后发布信息自动刷新。</li>
-              <li><b>刷新|重置</b>：重新读取默认项目与环境配置。</li>
-            </ul>
-          </div>
-        </el-collapse-item>
-
-        <!-- 日志信息区域 -->
-        <el-collapse-item name="log">
-          <template #title><span class="help-title">四、日志信息区域与停止按钮</span></template>
-          <div class="help-section">
-            <ul>
-              <li><b>总体日志</b>：所有功能的执行过程按时间顺序记录；按服务器操作的功能（备份/发布等）还会生成<b>独立标签页</b>，便于分别查看。</li>
-              <li><b>服务器操作日志</b>：备份 / 恢复备份 / 上传程序集 / 发布完成后，自动在服务器对应目录的日志文件里<b>追加一行</b>（时间 + 操作信息）：备份、恢复记录时间文件夹、服务文件夹与恢复目标，写在【服务备份路径】下的 <code>备份日志.log</code>、<code>恢复日志.log</code>；上传记录文件个数（WPF 为文件清单与 zip 版本）、发布记录模块、服务标识与发布路径，写在【程序集暂存路径】下的 <code>上传日志.log</code>、<code>发布日志.log</code>。写入失败只在本页告警，不影响操作本身；可在服务器管理页【查看日志】【下载日志】回查。</li>
-              <li><b>单行进度</b>：复制/上传等循环任务在同一行刷新「n/N」，不刷屏。</li>
-              <li><b>传输进度</b>：下载、上传、压缩都会在同一行日志实时刷新进度（下载按文件计数 + 字节百分比，上传按字节百分比，压缩按文件数），无需另开窗口查看。</li>
-              <li><b>停止按钮</b>（日志卡标题右侧红色按钮）：向正在执行的功能发出停止请求，<b>立即生效</b>：
-                <ul>
-                  <li>重试之间、等待轮询中、连接服务器的建连阶段都会秒级中断，不再傻等。</li>
-                  <li>单个正在进行中的命令本体（如一个正在上传的文件）无法掐断，会在该命令结束后停止后续操作。</li>
-                </ul>
-              </li>
-              <li><b>对话框停止</b>：服务管理、程序集信息、服务备份、恢复备份等对话框内也有「停止」按钮，停止后返回已获取的部分结果并提示已获取条数。</li>
-              <li>日志中的红色为失败、黄色为警告（含后端重试提示「[重试] 第 n/N 次失败」）、绿色为成功。</li>
-            </ul>
-          </div>
-        </el-collapse-item>
-
-        <!-- 常见问题 -->
-        <el-collapse-item name="faq">
-          <template #title><span class="help-title">五、常见问题</span></template>
-          <div class="help-section">
-            <ul>
-              <li><b>查看服务备份没有数据？</b>先在服务器管理配置【服务备份路径】并执行一次【备份】；也可直接读取服务器上已有的备份目录（按名称降序前 10 个）。</li>
-              <li><b>获取程序集很慢？</b>TFS/Git 方式要查询版本历史并到本机源码解析 csproj 生成 DLL 清单；生成发布日志勾选了「DLL文件」也会增加解析耗时。同一配置在本次运行内会复用查询结果。</li>
-              <li><b>SMOM发布日志文件在哪？</b>在程序集输出路径下，文件名 <code>SMOM发布日志_年月日时分秒.log</code>，每次生成会先清理旧的。</li>
-              <li><b>服务器上的操作日志在哪？</b>备份 / 恢复在【服务备份路径】下、上传 / 发布在【程序集暂存路径】下，各有一个日志文件（备份日志 / 恢复日志 / 上传日志 / 发布日志），本页每次执行对应操作都会追加一行；服务器管理页操作列【查看日志】【下载日志】可直接回查。</li>
-              <li><b>发布失败提示「服务已停止且未完成替换」？</b>按日志提示处理：可重新【上传程序集】后再【发布】，或手动启动服务。</li>
-              <li><b>核对程序集全报「时间不一致」？</b>历史上传的文件修改时间是上传时刻（上传时未保留本地时间），重新执行【上传程序集】后再核对即可；新上传的文件已自动保留本地修改时间（比对容差 ±2 秒）。</li>
-              <li><b>核对程序集报「服务器多出」/ 发布后服务里出现已删除的旧文件？</b>说明服务器暂存目录残留了本地已删除的文件（旧版本上传只覆盖不清空）。现在【上传程序集】会先清空暂存模块目录再上传，重新执行一次即可消除；清空后该行应显示「一致」。</li>
-              <li><b>打包上传后服务器文件时间比本机少 1 秒 / 之前曾整体差 8 小时？</b>zip 内记录的时间只有 2 秒精度且不带时区，解压端按服务器时区解释：奇数秒文件解压后最多差 1 秒，属正常现象，【核对程序集】已按 ±2 秒容差比对。WpfClient 走逐文件上传，时间完全一致。</li>
-              <li><b>功能按钮置灰/提示有功能在执行？</b>同一时间只允许一个功能运行，等待当前功能完成或点停止。</li>
-            </ul>
-          </div>
-        </el-collapse-item>
-      </el-collapse>
+      <!-- 内容由同目录 help.md 维护，此处仅负责渲染（GitHub markdown 预览样式） -->
+      <div class="markdown-body help-markdown-body" v-html="helpHtml"></div>
     </div>
     <template #footer>
-      <el-button @click="visible = false">我已了解，关 闭</el-button>
+      <el-button @click="visible = false">我已了解，关闭</el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup lang="ts" name="publishStepHelpDialog">
-import { ref } from "vue";
+import { ref, computed } from "vue";
+import MarkdownIt from "markdown-it";
+import "github-markdown-css/github-markdown-light.css";
+// 功能说明正文：直接维护同目录下的 help.md（Vite ?raw 以字符串引入，随打包发布）
+import helpMarkdown from "../help.md?raw";
 
 const visible = ref(false);
-const activeNames = ref(["quick"]);
+
+// markdown 渲染（内容为本地内置文档，非用户输入，无需额外消毒）
+const md = new MarkdownIt({ html: false, linkify: false, breaks: false });
+const helpHtml = computed(() => md.render(helpMarkdown));
 
 const openDialog = () => {
   visible.value = true;
@@ -229,56 +41,64 @@ defineExpose({ openDialog });
   padding-right: 6px;
 }
 
-.help-title {
-  font-weight: 600;
-  font-size: 14px;
-}
-
-.help-section {
+// GitHub 预览样式适配弹窗：缩小基准字号、去掉其自带的外框与内边距，避免引入全局污染
+:deep(.help-markdown-body) {
   font-size: 13px;
-  line-height: 22px;
+  padding: 0;
+  background: transparent;
   color: var(--el-text-color-primary);
 
-  p {
-    margin: 8px 0 4px;
+  h1,
+  h2 {
+    border-bottom-color: var(--el-border-color-lighter);
   }
 
-  .group-label {
-    margin-top: 14px;
-    color: var(--el-text-color-secondary);
-    font-size: 12px;
-    letter-spacing: 1px;
+  h2 {
+    font-size: 16px;
   }
 
-  h4 {
-    margin: 12px 0 4px;
+  h3 {
+    font-size: 14px;
+  }
+
+  table {
     font-size: 13px;
-    color: var(--el-color-primary);
+
+    th,
+    td {
+      text-align: left;
+    }
+
+    // github-markdown-light.css 表格底色是写死的白色，这里改用主题变量，深浅色都由主题控制
+    tr {
+      background-color: transparent;
+      border-top: 1px solid var(--el-border-color);
+    }
+
+    tr:nth-child(2n) {
+      background-color: var(--el-fill-color-lighter);
+    }
+
+    th,
+    td {
+      border: 1px solid var(--el-border-color);
+    }
+
+    th {
+      background-color: var(--el-fill-color-light);
+      color: var(--el-text-color-primary);
+    }
   }
 
-  ol,
-  ul {
-    padding-left: 20px;
-    margin: 4px 0;
-
-    li {
-      margin-bottom: 4px;
-    }
-
-    li > ul {
-      margin-top: 4px;
-
-      li {
-        color: var(--el-text-color-regular);
-      }
-    }
+  blockquote {
+    color: var(--el-text-color-secondary);
+    border-left-color: var(--el-border-color);
   }
 
   code {
-    background: var(--el-fill-color-light);
-    border-radius: 3px;
-    padding: 1px 5px;
     font-size: 12px;
+    background-color: var(--el-fill-color);
+    color: var(--el-color-primary);
   }
 }
 </style>

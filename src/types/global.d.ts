@@ -155,6 +155,11 @@ declare type LogTabType = {
 
 // 上传文件数量
 declare type LogPrintType = {
+	// 自增 id：供进度更新按 id 定位日志行（行数裁剪会使数组下标前移，不能再用下标）；
+	// 可选字段：STEP 日志（useStepLog）写入时赋值，home/备份页等其它日志实现不受影响
+	id?: number;
+	// 操作分隔线标记：为 true 时该行渲染为一条分割线（用于区分不同功能操作的日志区间）
+	divider?: boolean;
 	content: LogContentType;
 	type: "log-info" | "log-warning" | "log-error" | "log-success";
 };

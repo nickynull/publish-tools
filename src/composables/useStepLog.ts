@@ -1,67 +1,71 @@
-import { ref, computed, nextTick } from "vue";
+import { ref, nextTick } from "vue";
 import { formatDate } from "@/utils/formatTime";
+
+// 日志行数上限配置：存 localStorage（本机记忆，无需入库）
+const STEP_LOG_MAX_LINES_KEY = "stepLogMaxLines";
+const STEP_LOG_MAX_LINES_DEFAULT = 1000;
+const STEP_LOG_MAX_LINES_MIN = 10;
+const STEP_LOG_MAX_LINES_MAX = 100000;
 
 /**
  * 项目发布(STEP) 日志组合式函数
- * 提供：总体日志 + 按服务实例动态标签页的日志能力（与 home 页交互模式一致，独立实现，不影响原页面）
+ * 所有日志输出到唯一日志区（单页签），带行数上限（超出后清理最旧的行）；
+ * 进度行通过自增 id 寻址（行数裁剪会使数组下标前移，不能再用下标定位）。
  */
 export function useStepLog() {
 	const logPrintInfo = ref<LogPrintType[]>([]);
-	// 日志标签页：main 为基础日志，服务操作时按实例动态创建
-	const logTabs = ref<LogTabType[]>([]);
-	const activeLogTab = ref<string>("main");
-	const tabContentRefs = ref<Record<string, HTMLElement>>({});
-	// 串行操作期间的服务日志标签页上下文，内部日志无需逐个传 tabId
-	let currentLogTabId: string | undefined = undefined;
+	// 日志内容容器（唯一），用于自动滚动到底部
+	let logContentEl: HTMLElement | null = null;
+	// 自增日志 id：printInfoLog 返回，供进度更新按 id 定位
+	let nextLogId = 1;
 
-	// 展示的标签页：基础页 + 动态服务页
-	const displayTabs = computed<LogTabType[]>(() => {
-		const baseTab: LogTabType = {
-			id: "main",
-			label: "总体日志",
-			logs: logPrintInfo.value,
-			status: "info",
-		};
-		return [baseTab, ...logTabs.value];
-	});
+	// 行数上限：初始化时读 localStorage，非法/缺失回退默认
+	const maxLogLines = ref<number>(loadMaxLines());
 
-	// 创建日志标签页
-	const createLogTab = (serviceName: string, serverName: string, instanceName?: string): string => {
-		const id = `${serviceName}_${serverName}_${instanceName || "default"}_${Date.now()}_${logTabs.value.length}`;
-		const label = instanceName
-			? `${serviceName} / ${serverName} / ${instanceName}`
-			: `${serviceName} / ${serverName}`;
-		logTabs.value.push({ id, label, logs: [], status: "pending" });
-		return id;
-	};
-
-	// 更新标签页状态
-	const updateTabStatus = (tabId: string, status: LogTabType["status"]) => {
-		const tab = logTabs.value.find((t) => t.id === tabId);
-		if (tab) tab.status = status;
-	};
-
-	// 绑定标签页内容区 DOM 引用
-	const setTabContentRef = (id: string, el: any) => {
-		if (el) tabContentRefs.value[id] = el;
-	};
-
-	// 在指定日志标签页上下文中执行
-	const withLogTab = async <T>(tabId: string, action: () => Promise<T>): Promise<T> => {
-		const prev = currentLogTabId;
-		currentLogTabId = tabId;
+	function loadMaxLines(): number {
 		try {
-			return await action();
-		} finally {
-			currentLogTabId = prev;
+			const raw = localStorage.getItem(STEP_LOG_MAX_LINES_KEY);
+			if (!raw) return STEP_LOG_MAX_LINES_DEFAULT;
+			return clampMaxLines(Number(raw));
+		} catch {
+			return STEP_LOG_MAX_LINES_DEFAULT;
+		}
+	}
+
+	function clampMaxLines(n: number): number {
+		if (!Number.isFinite(n)) return STEP_LOG_MAX_LINES_DEFAULT;
+		return Math.min(STEP_LOG_MAX_LINES_MAX, Math.max(STEP_LOG_MAX_LINES_MIN, Math.round(n)));
+	}
+
+	// 超出行数上限时一次裁掉最旧的超出部分，保留最新 max 行
+	const trimLogs = () => {
+		const max = maxLogLines.value;
+		if (logPrintInfo.value.length > max) {
+			logPrintInfo.value.splice(0, logPrintInfo.value.length - max);
 		}
 	};
 
+	// 设置行数上限：校验并夹取范围后写 ref + localStorage，并立即裁剪一次
+	const setMaxLogLines = (n: number) => {
+		const value = clampMaxLines(Number(n));
+		maxLogLines.value = value;
+		try {
+			localStorage.setItem(STEP_LOG_MAX_LINES_KEY, String(value));
+		} catch {
+			// localStorage 不可用时仅本次会话生效
+		}
+		trimLogs();
+	};
+
+	// 绑定日志内容区 DOM 引用
+	const setLogContentRef = (el: any) => {
+		if (el) logContentEl = el;
+	};
+
 	// 滚动到日志底部
-	const scrollLogToBottom = (tabId: string) => {
+	const scrollLogToBottom = () => {
 		nextTick(() => {
-			const el = tabContentRefs.value[tabId];
-			if (el) el.scrollTop = el.scrollHeight;
+			if (logContentEl) logContentEl.scrollTop = logContentEl.scrollHeight;
 		});
 	};
 
@@ -70,20 +74,21 @@ export function useStepLog() {
 	 * @param content 日志内容
 	 * @param type：log-info、log-warning、log-error、log-success
 	 * @param showDate 是否显示日期
-	 * @param tabId 指定日志标签页；不传则写入当前上下文所在的标签页
+	 * @returns 日志行 id（供 updateLogProgress / setLogProgressText 定位）
 	 */
 	const printInfoLog = (
 		content: string,
 		type: "log-info" | "log-warning" | "log-error" | "log-success" = "log-info",
-		showDate: boolean = true,
-		tabId?: string
-	) => {
+		showDate: boolean = true
+	): number => {
 		let nowDate = "";
 		if (showDate) {
 			nowDate = `[${formatDate(new Date(), "YYYY-mm-dd HH:MM:SS")}] `;
 		}
 		let logContent = content ? `${nowDate}${content}` : "　";
-		let logInfo: LogPrintType = {
+		const logId = nextLogId++;
+		const logInfo: LogPrintType = {
+			id: logId,
 			type,
 			content: {
 				value: logContent,
@@ -93,60 +98,60 @@ export function useStepLog() {
 				},
 			},
 		};
-
-		// 服务操作上下文：写入对应标签页
-		const targetTabId = tabId ?? currentLogTabId;
-		if (targetTabId) {
-			const tab = logTabs.value.find((t) => t.id === targetTabId);
-			if (tab) {
-				tab.logs.push(logInfo);
-				// 失败日志自动把仍在运行中的标签页标记为失败
-				if (type === "log-error" && tab.status === "running") tab.status = "error";
-				scrollLogToBottom(targetTabId);
-				return tab.logs.length - 1;
-			}
-		}
-
 		logPrintInfo.value.push(logInfo);
-		scrollLogToBottom("main");
-		return logPrintInfo.value.length - 1;
+		trimLogs();
+		scrollLogToBottom();
+		return logId;
 	};
 
-	// 更新上传进度（写入当前上下文所在的日志数组）
+	// 打印操作分割线：用于划分不同功能操作的日志区间（label 可选，显示在分割线中间）
+	const printLogDivider = (label: string = "") => {
+		const logId = nextLogId++;
+		const logInfo: LogPrintType = {
+			id: logId,
+			type: "log-info",
+			divider: true,
+			content: {
+				value: label,
+				uploadFile: {
+					currNumber: 0,
+					totalNumber: 0,
+				},
+			},
+		};
+		logPrintInfo.value.push(logInfo);
+		trimLogs();
+		scrollLogToBottom();
+		return logId;
+	};
+
+	// 按 id 查找日志行（被行数裁剪清掉的行静默跳过）
+	const findLogById = (logId: number) => logPrintInfo.value.find((l) => l.id === logId);
+
+	// 更新上传进度（按 id 定位日志行）
 	const updateLogProgress = (
-		logIndex: number,
+		logId: number,
 		prefix: string,
 		currNumber: number,
-		totalNumber: number,
-		tabId?: string
+		totalNumber: number
 	) => {
-		const targetTabId = tabId ?? currentLogTabId;
-		const logs = targetTabId
-			? logTabs.value.find((t) => t.id === targetTabId)?.logs
-			: logPrintInfo.value;
-		if (!logs || !logs[logIndex]) return;
-		logs[logIndex].content.uploadFile.prefix = prefix;
-		logs[logIndex].content.uploadFile.currNumber = currNumber;
-		logs[logIndex].content.uploadFile.totalNumber = totalNumber;
+		const log = findLogById(logId);
+		if (!log) return;
+		log.content.uploadFile.prefix = prefix;
+		log.content.uploadFile.currNumber = currNumber;
+		log.content.uploadFile.totalNumber = totalNumber;
 	};
 
-	// 写入进度补充文本（与 updateLogProgress 同标签页路由，用于字节/百分比等补充展示）
-	const setLogProgressText = (logIndex: number, text: string, tabId?: string) => {
-		const targetTabId = tabId ?? currentLogTabId;
-		const logs = targetTabId
-			? logTabs.value.find((t) => t.id === targetTabId)?.logs
-			: logPrintInfo.value;
-		if (!logs || !logs[logIndex]) return;
-		logs[logIndex].content.uploadFile.progressText = text;
+	// 写入进度补充文本（按 id 定位日志行，用于字节/百分比等补充展示）
+	const setLogProgressText = (logId: number, text: string) => {
+		const log = findLogById(logId);
+		if (!log) return;
+		log.content.uploadFile.progressText = text;
 	};
 
 	// 清空日志
 	const onRemoveLogs = () => {
 		logPrintInfo.value = [];
-		logTabs.value = [];
-		tabContentRefs.value = {};
-		activeLogTab.value = "main";
-		currentLogTabId = undefined;
 	};
 
 	// 初始化日志
@@ -155,14 +160,10 @@ export function useStepLog() {
 		printInfoLog("项目环境：" + environmentName);
 	};
 
-	// 收集失败日志（错误/警告，最近 20 条）
+	// 收集失败日志（错误/警告，最近 20 条），跳过分割线行
 	const collectFailLogs = () => {
-		const allLogs = logTabs.value.reduce<LogPrintType[]>(
-			(acc, tab) => acc.concat(tab.logs),
-			[...logPrintInfo.value]
-		);
-		const logs = allLogs
-			.filter((log) => log.type === "log-error" || log.type === "log-warning")
+		const logs = logPrintInfo.value
+			.filter((log) => !log.divider && (log.type === "log-error" || log.type === "log-warning"))
 			.map((log) => log.content.value)
 			.filter(Boolean);
 		const recentLogs = logs.slice(-20);
@@ -174,14 +175,11 @@ export function useStepLog() {
 
 	return {
 		logPrintInfo,
-		logTabs,
-		activeLogTab,
-		displayTabs,
-		createLogTab,
-		updateTabStatus,
-		setTabContentRef,
-		withLogTab,
+		maxLogLines,
+		setMaxLogLines,
+		setLogContentRef,
 		printInfoLog,
+		printLogDivider,
 		updateLogProgress,
 		setLogProgressText,
 		onRemoveLogs,

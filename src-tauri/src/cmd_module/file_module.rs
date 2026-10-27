@@ -391,6 +391,110 @@ pub async fn zip_dir(app: tauri::AppHandle, src_dir: &str, dst_file: &str) -> Re
     Ok(true)
 }
 
+/// 批量压缩的单个源：本地目录 + zip 内的顶层目录名
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZipDirSource {
+    /// 本地源目录，如 `<程序集输出>/WebApiHost`
+    pub src_dir: String,
+    /// zip 内的顶层目录名，如 `WebApiHost`（WpfClient 取 packOutput 的内容落成 `WpfClient/`）
+    pub entry: String,
+}
+
+/// 多目录压缩[ZIP]文件：把一个或多个本地目录压进同一个 zip，各目录在 zip 内落成 `<entry>/` 顶层目录
+///
+/// 与 `zip_dir` 的差异：`zip_dir` 把单个目录的内容平铺在 zip 根，无法表达多个模块各自一个顶层目录；
+/// `create_zip` 虽支持多路径但用 Stored 不压缩，且顶层目录名固定取路径末级名字（WpfClient 需要 `packOutput` → `WpfClient` 的映射）。
+///
+/// # Arguments
+/// * `sources` - 源目录列表（src_dir 本地目录，entry zip 内顶层目录名）
+/// * `dst_file` - 输出的zip文件路径
+///
+/// # Returns
+/// * `Ok(true)` 成功
+/// * `Err(String)` 失败
+#[tauri::command]
+pub async fn zip_dirs(
+    app: tauri::AppHandle,
+    sources: Vec<ZipDirSource>,
+    dst_file: &str,
+) -> Result<bool, String> {
+    if sources.is_empty() {
+        return Err("没有需要压缩的目录.".to_string());
+    }
+    let mut progress = ProgressState::new(Some(&app));
+    let file = File::create(dst_file).map_err(|e| e.to_string())?;
+    let mut zip = ZipWriter::new(file);
+
+    let options = FileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o755);
+
+    // 进度分母：全部源目录的文件数与总字节（扫描失败退化为 0，即不定长展示）
+    let src_dirs: Vec<&str> = sources.iter().map(|s| s.src_dir.as_str()).collect();
+    let (file_total, total_bytes) = scan_zip_sources(&src_dirs);
+    let mut file_index: u32 = 0;
+    let mut processed: u64 = 0;
+
+    for source in &sources {
+        let entry = source.entry.trim_matches('/').trim_matches('\\');
+        if entry.is_empty() {
+            return Err("压缩包内的顶层目录名为空.".to_string());
+        }
+        let src_path = Path::new(&source.src_dir);
+        if !src_path.is_dir() {
+            return Err(format!("源目录不存在：{}", source.src_dir));
+        }
+        // 顶层目录条目
+        zip.add_directory(entry, with_mtime(options, src_path))
+            .map_err(|e| e.to_string())?;
+
+        for entry_result in WalkDir::new(src_path) {
+            let entry_item = entry_result.map_err(|e| e.to_string())?;
+            let path = entry_item.path();
+            if path == src_path {
+                // 根目录已作为顶层目录写入
+                continue;
+            }
+            let name = path
+                .strip_prefix(src_path)
+                .map_err(|e| e.to_string())?;
+            let zip_name = format!("{}/{}", entry, path_to_string(name));
+
+            if path.is_file() {
+                file_index += 1;
+                let file_name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                // 写入本地修改时间：避免「打包上传 → 服务端解压」后文件时间变成 1980 年
+                zip.start_file(zip_name, with_mtime(options, path))
+                    .map_err(|e| e.to_string())?;
+                let mut f = File::open(path).map_err(|e| e.to_string())?;
+                copy_with_progress(
+                    &mut f,
+                    &mut zip,
+                    &file_name,
+                    file_index,
+                    file_total,
+                    &mut processed,
+                    total_bytes,
+                    Some(&mut progress),
+                )
+                .map_err(|e| e.to_string())?;
+            } else if path.is_dir() {
+                zip.add_directory(zip_name, with_mtime(options, path))
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+    }
+
+    zip.finish().map_err(|e| e.to_string())?;
+    progress.emit_force("zip", "", processed, total_bytes, file_index, file_total);
+    Ok(true)
+}
+
 fn path_to_string(path: &std::path::Path) -> String {
     let mut path_str = String::new();
     for component in path.components() {

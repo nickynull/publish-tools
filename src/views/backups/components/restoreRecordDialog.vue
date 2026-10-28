@@ -227,11 +227,11 @@ defineExpose({
   font-family: "Courier New", Consolas, monospace;
   font-size: 13px;
   line-height: 1.6;
-  color: #303133;
+  color: var(--el-text-color-primary);
 }
 
 .log-empty {
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 14px;
 }
 </style>

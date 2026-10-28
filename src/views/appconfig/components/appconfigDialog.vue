@@ -424,8 +424,9 @@
                 <el-row>
                   <el-col :span="24">
                     <el-form-item label-width="0">
-                      <template v-for="serverVal in wpfServer.serverPathArr[0].value" :key="serverVal.identity">
-                        <el-input v-model="serverVal.path" placeholder="请输入发布路径" maxlength="200" clearable>
+                      <template v-for="(serverVal, valIndex) in wpfServer.serverPathArr[0].value || []" :key="valIndex">
+                        <el-input :data-idx="valIndex" v-model="serverVal.path" placeholder="请输入发布路径"
+                          maxlength="200" clearable>
                           <template #prepend>发布路径</template>
                         </el-input>
                       </template>
@@ -875,6 +876,21 @@ const onBuildModeChange = async (val: string) => {
   }
 };
 
+// 根据服务器默认服务标识/发布路径组（服务器管理中配置）构建服务路径，多组带出；未配置时返回一组空值
+// 只带出「服务类型为空（通用）或等于当前服务类型」的组，应用配置侧仅保留 identity/path 结构
+const buildServerPathArr = (server: RowServerType | undefined, serviceType: string): ServerOptionType[] => {
+  const defaults = (server?.defaultServerPaths ?? [])
+    .filter((item) => (item.identity ?? "") !== "" || (item.path ?? "") !== "")
+    .filter((item) => !item.serviceType || item.serviceType === serviceType);
+  if (defaults.length < 1) {
+    return [{ label: "", value: [{ identity: "", path: "" }] }];
+  }
+  return defaults.map((item) => ({
+    label: "", // 服务端发布
+    value: [{ identity: item.identity ?? "", path: item.path ?? "" }],
+  }));
+};
+
 // 调度服务器切换
 const onScheduleServerChange = async (val: number[]) => {
   if (!val || val.length < 1) {
@@ -900,17 +916,7 @@ const onScheduleServerChange = async (val: number[]) => {
     state.ruleForm.configItems.scheduleServer.serverArr.push({
       id: sServer.id,
       name: sServer.name,
-      serverPathArr: [
-        {
-          label: "", // 服务端发布
-          value: [
-            {
-              identity: "",
-              path: "",
-            },
-          ],
-        },
-      ],
+      serverPathArr: buildServerPathArr(sServer, "ScheduleServer"),
     });
   }
 };
@@ -940,15 +946,11 @@ const onWpfClientServerChange = async (val: number[]) => {
     state.ruleForm.configItems.wpfClient.serverArr.push({
       id: wServer.id,
       name: wServer.name,
+      // WpfClient 模板只渲染 serverPathArr[0].value，多组默认值合并到单组 value 中
       serverPathArr: [
         {
           label: "", // 服务端发布
-          value: [
-            {
-              identity: "",
-              path: "",
-            },
-          ],
+          value: buildServerPathArr(wServer, "WpfClient").flatMap((group) => group.value ?? []),
         },
       ],
     });
@@ -1007,17 +1009,7 @@ const onWebApiServerChange = async (val: number[]) => {
     state.ruleForm.configItems.webApiHost.serverArr.push({
       id: wApiServer.id,
       name: wApiServer.name,
-      serverPathArr: [
-        {
-          label: "", // 服务端发布
-          value: [
-            {
-              identity: "",
-              path: "",
-            },
-          ],
-        },
-      ],
+      serverPathArr: buildServerPathArr(wApiServer, "WebApiHost"),
     });
   }
 };
@@ -1049,17 +1041,7 @@ const onSpcMonitorServerChange = async (val: number[]) => {
     state.ruleForm.configItems.spcMonitor.serverArr.push({
       id: sMonitorServer.id,
       name: sMonitorServer.name,
-      serverPathArr: [
-        {
-          label: "", // 服务端发布
-          value: [
-            {
-              identity: "",
-              path: "",
-            },
-          ],
-        },
-      ],
+      serverPathArr: buildServerPathArr(sMonitorServer, "SpcMonitor"),
     });
   }
 };
@@ -1091,17 +1073,7 @@ const onWebClientServerChange = async (val: number[]) => {
     state.ruleForm.configItems.webClient.serverArr.push({
       id: wClientServer.id,
       name: wClientServer.name,
-      serverPathArr: [
-        {
-          label: "", // 服务端发布
-          value: [
-            {
-              identity: "",
-              path: "",
-            },
-          ],
-        },
-      ],
+      serverPathArr: buildServerPathArr(wClientServer, "WebClient"),
     });
   }
 };
@@ -1690,5 +1662,28 @@ defineExpose({
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* 深色模式适配：替换硬编码浅色背景/边框 */
+[data-theme='dark'] {
+  .form-item-env {
+    background-color: var(--next-color-primary);
+  }
+
+  .form-item-version {
+    background-color: rgba(230, 162, 60, 0.12); /* 保留"警示提示"语义的暖色调暗色背景 */
+
+    .version-remark {
+      color: var(--el-text-color-regular);
+    }
+  }
+
+  .form-select-file {
+    background-color: var(--next-color-primary);
+  }
+
+  .form-server-fieldset {
+    border-color: var(--next-border-black);
+  }
 }
 </style>

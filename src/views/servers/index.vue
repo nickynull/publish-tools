@@ -84,7 +84,7 @@
       >
         <el-table-column type="selection" width="50" />
         <el-table-column fixed type="index" label="序号" width="60" />
-        <el-table-column prop="name" label="服务器名称" width="200" />
+        <el-table-column prop="name" label="服务器名称" width="180" />
         <el-table-column prop="os" label="服务环境" width="100">
           <template #default="scope">
             {{ displayOs(scope.row.os) }}
@@ -94,14 +94,18 @@
         <el-table-column prop="port" label="SSH端口" width="120" />
         <el-table-column prop="account" label="登录账户" width="120" />
         <!-- <el-table-column prop="pwd" label="登录密码" width="120" /> -->
-        <el-table-column prop="projectName" label="所属项目名称" width="200" />
+        <el-table-column prop="projectName" label="所属项目名称" width="200">
+          <template #default="scope">
+            {{ scope.row.projectName ?? "全部项目" }}
+          </template>
+        </el-table-column>
         <el-table-column
           prop="description"
           label="描述"
           min-width="260"
           show-overflow-tooltip
         />
-        <el-table-column label="操作" width="250" fixed="right">
+        <el-table-column label="操作" width="220" fixed="right">
           <template #default="scope">
             <el-button size="small" text type="success" @click="onCopyServer(scope.row)"
               >复制新增</el-button
@@ -383,7 +387,7 @@ const onScanRemote = async () => {
   selectedDiscoveryKeys.value = [];
   discoveryDrawerVisible.value = true;
   await loadDiscoveryPrefixes();
-  await doScanRemote({ ip: `${target.ip}:${target.port}`, account: target.account, pwd: target.pwd });
+  await doScanRemote({ ip: target.ip, port: target.port, account: target.account, pwd: target.pwd, os: target.os });
 };
 
 const onConfirmImport = async () => {

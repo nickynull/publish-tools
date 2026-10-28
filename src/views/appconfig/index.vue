@@ -164,6 +164,40 @@
       </el-pagination>
     </el-card>
     <appconfig-dialog ref="appconfigDialogRef" @refresh="getTableData()" />
+    <!-- 复制新增：选择目标环境 -->
+    <el-dialog
+      v-model="copyDialog.visible"
+      title="复制新增应用配置"
+      width="420px"
+      :close-on-click-modal="false"
+    >
+      <el-form label-width="90px">
+        <el-form-item label="源配置">
+          <span>{{ copyDialog.projectName }}（{{ copyDialog.sourceEnvLabel }}）</span>
+        </el-form-item>
+        <el-form-item label="目标环境">
+          <el-select
+            v-model="copyDialog.environment"
+            placeholder="请选择新环境"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="env in ENV_OPTIONS"
+              :key="env.value"
+              :label="copyDialog.existingEnvs.includes(env.value) ? `${env.label}（已存在）` : env.label"
+              :value="env.value"
+            />
+          </el-select>
+          <div v-if="copyDialog.existingEnvs.length >= ENV_OPTIONS.length" class="copy-env-tip">
+            该项目的四个环境均已存在应用配置，无法复制新增。
+          </div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="copyDialog.visible = false">取 消</el-button>
+        <el-button type="primary" @click="onCopyConfirm">复 制</el-button>
+      </template>
+    </el-dialog>
     <backup-dialog ref="backupDialogRef" />
     <import-preview-dialog ref="importPreviewDialogRef" @confirm="onImportConfirm" />
   </div>
@@ -284,13 +318,72 @@ const onOpenAppconfigDialog = (type: string, row: any = null) => {
   appconfigDialogRef.value.openDialog(type, row);
 };
 
-// 复制新增
+// 复制新增：保留项目与其他配置，仅让用户选择新的目标环境
+// 环境选项（与应用配置环境字典一致）
+const ENV_OPTIONS = [
+  { value: 1, label: "Dev" },
+  { value: 2, label: "Uat" },
+  { value: 3, label: "Pro" },
+  { value: 4, label: "Other" },
+];
+
+const copyDialog = reactive({
+  visible: false,
+  row: null as RowAppconfigType | null,
+  projectName: "",
+  sourceEnvLabel: "",
+  environment: null as number | null,
+  // 该项目下已存在应用配置的环境值
+  existingEnvs: [] as number[],
+});
+
 const onCopyAppconfig = async (row: RowAppconfigType) => {
-  const newRow = _.cloneDeep(row);
-  newRow.projectId = null;
+  if (!row.projectId) {
+    ElMessage.error("该应用配置未关联项目，无法复制新增！");
+    return;
+  }
+  // 查询该项目已有配置的环境
+  const existResult = await appconfigDb.getAppconfigList({
+    projectId: Number(row.projectId),
+    environment: null,
+    sorting: "ta.environment ASC",
+    skipCount: 0,
+    maxResultCount: 100,
+  });
+  copyDialog.row = row;
+  copyDialog.projectName = String(row.projectName ?? "");
+  copyDialog.sourceEnvLabel = displayEnvironment(Number(row.environment));
+  copyDialog.existingEnvs = (existResult.code === 0 ? existResult.data.data : [])
+    .map((item) => Number(item.environment))
+    .filter((env) => env >= 1 && env <= 4);
+  // 默认选中第一个未占用的环境；全部占用则置空由用户自行处理
+  const freeEnv = ENV_OPTIONS.find((env) => !copyDialog.existingEnvs.includes(env.value));
+  copyDialog.environment = freeEnv ? freeEnv.value : null;
+  copyDialog.visible = true;
+};
+
+// 复制确认：目标环境已存在则报错，不存在才新增
+const onCopyConfirm = async () => {
+  if (!copyDialog.row) return;
+  if (!copyDialog.environment) {
+    ElMessage.warning("请选择目标环境！");
+    return;
+  }
+  const targetEnv = Number(copyDialog.environment);
+  const envLabel = ENV_OPTIONS.find((env) => env.value === targetEnv)?.label ?? String(targetEnv);
+  if (copyDialog.existingEnvs.includes(targetEnv)) {
+    ElMessage.error(
+      `项目[${copyDialog.projectName}]的[${envLabel}]环境已存在应用配置（项目+环境组合唯一），请选择其他环境！`
+    );
+    return;
+  }
+  const newRow = _.cloneDeep(copyDialog.row);
+  newRow.id = null; // 新增，不带源配置 id
+  newRow.environment = targetEnv; // 保留项目与其他配置，仅替换环境
   let insertResult = await appconfigDb.insertAppconfig(newRow);
   if (insertResult.code === 0) {
-    ElMessage.success("复制成功！");
+    ElMessage.success(`已复制到[${envLabel}]环境！`);
+    copyDialog.visible = false;
     await getTableData();
   } else {
     ElMessage.error(insertResult.msg);
@@ -585,5 +678,13 @@ onMounted(async () => {
       flex: 1;
     }
   }
+}
+
+// 复制新增：环境全部占用时的提示
+.copy-env-tip {
+  width: 100%;
+  font-size: 12px;
+  color: var(--el-color-danger);
+  line-height: 1.5;
 }
 </style>

@@ -11,7 +11,7 @@
 	--next-border-black: #333333;
 	--next-border-columns: #2a2a2a;
 	--next-color-seting: #505050;
-	--next-text-color-regular: #9b9da1;
+	--next-text-color-regular: #cfd3dc;
 	--next-text-color-placeholder: #7a7a7a;
 	--next-color-hover: #3c3c3c;
 	--next-color-hover-rgba: rgba(0, 0, 0, 0.3);
@@ -116,6 +116,13 @@
 		background: var(--next-color-primary-lighter);
 	}
 
+	// table
+	// 行 hover 背景必须不透明：默认取 --el-fill-color-light（本主题映射为半透明 rgba(0,0,0,0.3)），
+	// 固定列（position: sticky）下被横向滚动遮住的单元格内容会透出，表现为文字堆叠在操作按钮上
+	.el-table {
+		--el-table-row-hover-bg-color: var(--next-color-hover) !important;
+	}
+
 	// alert / notice-bar
 	.home-card-item {
 		border: 1px solid var(--next-border-color-light) !important;
@@ -171,6 +178,8 @@
 		border-right: none !important;
 		background: var(--next-color-disabled) !important;
 		border-left: 0 !important;
+		// 前缀/后缀文字（如「服务标识」「发布路径」）默认取 --el-color-info（#909399），深底上太暗
+		color: var(--el-text-color-regular) !important;
 	}
 	.el-input-number__decrease,
 	.el-input-number__increase {

@@ -63,14 +63,23 @@
                         <!-- 当前项目 -->
                         <div class="project-card">
                             <div class="project-select-row">
-                                <div class="project-select-label">发布项目环境</div>
+                                <div class="project-select-label">发布项目</div>
                                 <el-select filterable placeholder="请选择要发布的项目" size="default"
                                     v-model="state.publishData.projectId" class="w100" :disabled="isAnyLoading"
                                     @change="onProjectChange">
                                     <el-option v-for="project in projectList" :key="project.id" :label="project.name"
                                         :value="project.id" />
                                 </el-select>
-                                <el-tag>{{ displayEnvironment(state.publishData.environment) }}</el-tag>
+                            </div>
+                            <div class="project-select-row project-env-row">
+                                <div class="project-select-label">发布环境</div>
+                                <el-radio-group size="default" :disabled="isAnyLoading"
+                                    v-model="state.publishData.environment" @change="onEnvironmentChange">
+                                    <el-radio border :value="1">Dev</el-radio>
+                                    <el-radio border :value="2">Uat</el-radio>
+                                    <el-radio border :value="3">Pro</el-radio>
+                                    <el-radio border :value="4">Other</el-radio>
+                                </el-radio-group>
                             </div>
                         </div>
 
@@ -747,6 +756,9 @@ const stepPublishApi = useStepPublish(
 // 应用配置弹框环境变更
 const onAppConfigEnvChange = (newEnv: number) => {
     state.publishData.environment = newEnv;
+    if (state.publishData.projectId) {
+        saveEnvironmentToStorage(Number(state.publishData.projectId), Number(newEnv));
+    }
 };
 
 // 应用配置弹框项目变更（弹窗内切换项目管理后保存时同步到发布信息）
@@ -1418,6 +1430,7 @@ const getProjectDefault = async (options?: { keepCurrentEnvironment?: boolean })
             }
         }
         state.publishData.environment = targetEnvironment;
+        saveEnvironmentToStorage(projectId, targetEnvironment);
     }
     await getPublishAppconfigs();
 };
@@ -1448,6 +1461,27 @@ const restoreEnvironmentFromStorage = (projectId: number): number | null => {
     } catch (error) {
         console.error("恢复环境选择失败:", error);
         return null;
+    }
+};
+
+// 保存环境选择到本地存储（按项目维度，刷新/重置后可恢复上次选择）
+const saveEnvironmentToStorage = (projectId: number, environment: number) => {
+    try {
+        localStorage.setItem(`project_environment_${projectId}`, String(environment));
+    } catch (error) {
+        console.error("保存环境选择失败:", error);
+    }
+};
+
+// 环境切换：持久化 + 按「项目+环境」唯一重新取应用配置
+const onEnvironmentChange = async (val: number) => {
+    if (!state.publishData.projectId) return;
+    saveEnvironmentToStorage(Number(state.publishData.projectId), Number(val));
+    await getPublishAppconfigs();
+    if (!state.publishData.appconfigData.id) {
+        ElMessage.warning(
+            `该项目在[${displayEnvironment(Number(val))}]环境暂无应用配置，请先到[应用配置]中新增。`
+        );
     }
 };
 
@@ -1515,6 +1549,7 @@ const onProjectChange = async (val: number) => {
         } else {
             state.publishData.environment = 1;
         }
+        saveEnvironmentToStorage(val, state.publishData.environment);
     }
     await getPublishAppconfigs();
 };
@@ -1894,6 +1929,19 @@ $log-console-text: #ffffff;
                 .project-select-label {
                     flex: 0 0 6rem;
                     text-align: right;
+                }
+            }
+
+            // 发布环境单选组：紧凑排列，避免默认 30px 间距在卡片内换行
+            .project-env-row {
+                :deep(.el-radio-group) {
+                    flex: 1;
+                    flex-wrap: wrap;
+                    row-gap: 0.4rem;
+                }
+                :deep(.el-radio) {
+                    margin-right: 0.5rem;
+                    font-weight: 400;
                 }
             }
         }

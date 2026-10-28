@@ -11,7 +11,8 @@
                         <span class="settings-tip">{{ $t('message.settings.autoStartTip') }}</span>
                     </el-form-item>
 
-                    <!-- 启动默认菜单 -->
+                    <!-- 窗口（启动默认菜单 + 关闭窗口按钮行为） -->
+                    <el-divider content-position="left">{{ $t('message.settings.windowBehavior') }}</el-divider>
                     <el-form-item :label="$t('message.settings.startupMenu')">
                         <el-radio-group v-model="form.startupMenu">
                             <el-radio value="workstation">{{ $t('message.settings.startupMenuWorkstation') }}</el-radio>
@@ -19,6 +20,13 @@
                             <el-radio value="publishStep">{{ $t('message.settings.startupMenuPublishStep') }}</el-radio>
                         </el-radio-group>
                         <span class="settings-tip">{{ $t('message.settings.startupMenuTip') }}</span>
+                    </el-form-item>
+                    <el-form-item :label="$t('message.settings.windowCloseBehavior')">
+                        <el-radio-group v-model="windowConfig.close_behavior">
+                            <el-radio value="minimize">{{ $t('message.settings.windowCloseBehaviorMinimize') }}</el-radio>
+                            <el-radio value="exit">{{ $t('message.settings.windowCloseBehaviorExit') }}</el-radio>
+                        </el-radio-group>
+                        <span class="settings-tip">{{ $t('message.settings.windowCloseBehaviorTip') }}</span>
                     </el-form-item>
 
                     <!-- 一键发布 -->
@@ -183,6 +191,9 @@ const moveOrder = (idx: number, dir: number) => {
 const autoStartEnabled = ref(false);
 const autoStartLoading = ref(false);
 
+// 窗口行为配置（存 Rust 侧 config.json：关闭窗口事件由 Rust 同步处理，需能脱离前端读到配置）
+const windowConfig = reactive<{ close_behavior: string }>({ close_behavior: "minimize" });
+
 // MCP 配置
 const mcpConfig = reactive({
     mcp_enabled: true,
@@ -214,6 +225,8 @@ const buildFormSnapshot = () =>
         sshMcpUrl: form.sshMcpUrl || "",
         sshMcpAutoSync: form.sshMcpAutoSync,
         startupMenu: form.startupMenu || "workstation",
+        // 窗口行为存 config.json，但同样纳入「未保存」跟踪：改动后需点保存才生效
+        closeBehavior: windowConfig.close_behavior,
     });
 const buildMcpSnapshot = () => JSON.stringify({ mcp_enabled: mcpConfig.mcp_enabled, mcp_port: mcpConfig.mcp_port });
 const savedFormSnapshot = ref(buildFormSnapshot());
@@ -464,6 +477,12 @@ const onSave = async () => {
     form.publishModuleOrder = publishOrderList.value.join(',');
     const r = await settingsDb.saveSettings(form);
     if (r.code === 0) {
+        // 保存窗口行为配置（存 Rust config.json；失败时保留「未保存」提示便于重试）
+        const winR = await cmdInvoke<{ close_behavior: string }>("update_window_config", {
+            closeBehavior: windowConfig.close_behavior,
+        });
+        const winOk = winR.code === 0 && !!winR.data;
+        if (winOk && winR.data) windowConfig.close_behavior = winR.data.close_behavior || "minimize";
         // 保存 MCP 配置（端口变更时重启服务使新端口生效）
         const mcpR = await cmdInvoke<{ mcp_enabled: boolean; mcp_port: number }>("update_mcp_config", {
             mcpEnabled: mcpConfig.mcp_enabled,
@@ -481,13 +500,17 @@ const onSave = async () => {
                 mcpStatus.value = mcpConfig.mcp_enabled ? "starting" : "disabled";
                 if (mcpConfig.mcp_enabled) pollMcpStatus();
             }
-            ElMessage.success('设置保存成功');
-            mittBus.emit('settingsChanged');
+            if (winOk) {
+                ElMessage.success('设置保存成功');
+                mittBus.emit('settingsChanged');
+            } else {
+                ElMessage.warning('设置保存成功，但窗口关闭行为保存失败: ' + winR.msg);
+            }
         } else {
             ElMessage.warning('设置保存成功，但 MCP 配置保存失败: ' + mcpR.msg);
         }
-        // 刷新已保存快照：表单已落库；MCP 仅在保存成功时刷新，失败则保持「未保存」提示便于重试
-        savedFormSnapshot.value = buildFormSnapshot();
+        // 刷新已保存快照：表单已落库；MCP/窗口行为仅在保存成功时刷新，失败则保持「未保存」提示便于重试
+        if (winOk) savedFormSnapshot.value = buildFormSnapshot();
         if (mcpR.code === 0 && mcpR.data) savedMcpSnapshot.value = buildMcpSnapshot();
     } else {
         ElMessage.error(r.msg || '设置保存失败');
@@ -518,6 +541,9 @@ const load = async () => {
         mcpConfig.mcp_port = mcpR.data.mcp_port;
         mcpConfigSnapshot = { ...mcpConfig };
     }
+    // 加载窗口行为配置（默认最小化到托盘）
+    const winR = await cmdInvoke<{ close_behavior: string }>("get_window_config");
+    windowConfig.close_behavior = (winR.code === 0 && winR.data?.close_behavior) || "minimize";
     // 加载 MCP 运行状态（mcp-status 事件在启动时已发射，页面挂载后可能收不到）
     // 轮询真实状态；若为 unknown（服务仍在启动）则显示"启动中"并在超时后按配置回退
     await pollMcpStatus();

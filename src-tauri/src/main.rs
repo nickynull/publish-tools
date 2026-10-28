@@ -41,6 +41,22 @@ fn update_mcp_config(
     Ok(cfg.mcp)
 }
 
+/// 获取窗口行为配置（关闭按钮行为）
+#[tauri::command]
+fn get_window_config(app_handle: tauri::AppHandle) -> SmomPublish::config::WindowConfig {
+    SmomPublish::config::load(&app_handle).window
+}
+
+/// 更新窗口行为配置（写 config.json，下次点击窗口关闭按钮即按新配置执行）
+#[tauri::command]
+fn update_window_config(
+    app_handle: tauri::AppHandle,
+    close_behavior: Option<String>,
+) -> Result<SmomPublish::config::WindowConfig, String> {
+    let cfg = SmomPublish::config::update_window_config(&app_handle, close_behavior)?;
+    Ok(cfg.window)
+}
+
 /// 获取 MCP 运行状态（持久化，不依赖事件时序）
 #[tauri::command]
 fn get_mcp_status() -> String {
@@ -105,6 +121,8 @@ fn main() {
             auto_start_module::set_auto_start,
             get_mcp_config,
             update_mcp_config,
+            get_window_config,
+            update_window_config,
             get_mcp_status,
             mcp_action_result,
             file_module::exists,
@@ -153,9 +171,19 @@ fn main() {
             parse_sln_module::parse_sln_project,
             parse_sln_module::find_assembly_name,
         ])
-        // 保持前端在后台运行
+        // 保持前端在后台运行（关闭按钮行为按设置页配置：minimize 隐藏到托盘 / exit 退出程序）
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // 每次点击关闭时读最新落盘配置，避免依赖前端内存状态（前端未加载完也能取到正确值）
+                let close_behavior = SmomPublish::config::load(window.app_handle())
+                    .window
+                    .close_behavior;
+                if close_behavior == SmomPublish::config::CLOSE_BEHAVIOR_EXIT {
+                    // 走正常退出流程（触发 RunEvent::Exit），让 MCP 服务等资源被清理
+                    api.prevent_close();
+                    window.app_handle().exit(0);
+                    return;
+                }
                 if let Err(e) = window.hide() {
                     eprintln!("隐藏窗口失败: {:?}", e);
                 }

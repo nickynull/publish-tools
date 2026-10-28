@@ -290,14 +290,15 @@ const threeImgList = ref([
     width: 100%;
     flex-direction: row;
     .ssh-info-text {
-      background-color: #eef0f4;
+      // 命令说明底色：跟随主题填充色（浅色≈#f5f7fa，深色为暗色），避免深色模式下整块发白刺眼
+      background-color: var(--el-fill-color-light);
       padding: 8px;
       border-radius: 2px;
       word-wrap: break-word;
       word-break: break-all;
     }
     .ssh-info-img {
-      border: 1px solid #dcdfe6;
+      border: 1px solid var(--el-border-color);
       width: 100%;
       margin: 5px 0px;
     }
@@ -305,7 +306,8 @@ const threeImgList = ref([
 
   .ssh-link-download {
     text-decoration: none;
-    color: #303133;
+    // 深色模式跟随主题（浅色下即 #303133）
+    color: var(--el-text-color-primary);
   }
   .ssh-link-download:hover {
     text-decoration: underline;

@@ -323,7 +323,8 @@ onBeforeMount(async () => {
   }
   .t-link-path {
     text-decoration: none;
-    color: #303133;
+    // 深色模式跟随主题（浅色下即 #303133）
+    color: var(--el-text-color-primary);
   }
   .t-link-path:hover {
     text-decoration: underline;

@@ -44,7 +44,9 @@ async function ensureSchema(database: Database) {
         port INTEGER,
         account TEXT,
         pwd TEXT,
-        description TEXT
+        description TEXT,
+        default_server_paths TEXT,
+        upload_paths TEXT
     )`);
 
     await database.execute(`CREATE TABLE IF NOT EXISTS t_backup (
@@ -139,6 +141,14 @@ async function ensureSchema(database: Database) {
     // 项目发布STEP：程序集暂存路径（上传待发布程序集的目录，发布时替换到服务路径）
     if (!serverColumns.some((column) => column.name === "assembly_staging_path")) {
         await database.execute("ALTER TABLE t_server ADD COLUMN assembly_staging_path TEXT");
+    }
+    // 应用配置快速带出：默认服务标识/发布路径组（JSON 数组 [{identity, path}]，与应用配置服务路径组结构一致）
+    if (!serverColumns.some((column) => column.name === "default_server_paths")) {
+        await database.execute("ALTER TABLE t_server ADD COLUMN default_server_paths TEXT");
+    }
+    // 文件管理：文件管理路径候选（JSON 数组 ["D:\\upload", "/data/upload"]）
+    if (!serverColumns.some((column) => column.name === "upload_paths")) {
+        await database.execute("ALTER TABLE t_server ADD COLUMN upload_paths TEXT");
     }
     // 部分唯一索引：纳管行的 source_key 唯一（NULL 不受限制，本地自建行可多行为 NULL）
     await database.execute(

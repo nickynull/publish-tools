@@ -559,6 +559,24 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 		return instances;
 	};
 
+	// 服务状态遍历顺序：服务器优先（按实例中首次出现的顺序），服务器内按发布模块顺序（顺序外的模块排末尾）
+	const sortInstancesByServerThenModule = (instances: ServiceInstanceType[]): ServiceInstanceType[] => {
+		const serverOrder: number[] = [];
+		for (const ins of instances) {
+			if (!serverOrder.includes(ins.serverId)) serverOrder.push(ins.serverId);
+		}
+		const moduleOrder = getPublishModuleOrder();
+		const moduleRank = (name: string) => {
+			const idx = moduleOrder.indexOf(name);
+			return idx === -1 ? moduleOrder.length : idx;
+		};
+		// sort 稳定：同服务器同模块内的实例保持应用配置中的原顺序
+		return [...instances].sort((a, b) => {
+			const serverDiff = serverOrder.indexOf(a.serverId) - serverOrder.indexOf(b.serverId);
+			return serverDiff !== 0 ? serverDiff : moduleRank(a.module) - moduleRank(b.module);
+		});
+	};
+
 	// 校验实例路径
 	const validateInstances = (instances: ServiceInstanceType[]) => {
 		for (const ins of instances) {
@@ -1779,7 +1797,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			msg: "",
 			data: [],
 		};
-		const instances = getServiceInstances().filter((ins) => ins.identity);
+		const instances = sortInstancesByServerThenModule(getServiceInstances().filter((ins) => ins.identity));
 		if (instances.length < 1) {
 			result.code = 1;
 			result.msg = "应用配置中未找到带服务标识的服务，请检查应用配置.";
@@ -1790,6 +1808,8 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 		const statusCache = new Map<string, { statusText: string; running: boolean | null }>();
 		const rows: ServiceStatusRow[] = [];
 		let hasError = false;
+		// 分组日志：进入新服务器时输出一次【服务器】行，使日志顺序与界面分组的「服务器 → 服务器内发布模块顺序」一致
+		let lastServerId: number | null = null;
 
 		for (const ins of instances) {
 			// 支持停止控制：请求停止后立即返回已查询到的结果
@@ -1803,11 +1823,20 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			let status = statusCache.get(cacheKey);
 			if (!status) {
 				const serverInfo = await getServerDetail(ins.serverId);
+				const isNewServer = lastServerId !== ins.serverId;
 				if (!serverInfo) {
 					status = { statusText: "服务器不存在", running: null };
-					printInfoLog(`服务状态查询：服务器(ID:${ins.serverId})不存在`, "log-error");
+					if (isNewServer) {
+						printInfoLog(`【服务器】ID:${ins.serverId}（服务器不存在）`, "log-error");
+					}
 				} else {
 					const serverAddress = `${serverInfo.ip}:${serverInfo.port}`;
+					if (isNewServer) {
+						const serverInstanceCount = instances.filter((item) => item.serverId === ins.serverId).length;
+						printInfoLog(
+							`【服务器】${serverInfo.name}（${serverAddress}，${displayOs(Number(serverInfo.os))}）· ${serverInstanceCount} 个服务实例`
+						);
+					}
 					if (serverInfo.os === 1) {
 						printInfoLog(`查询服务状态：${serverInfo.name}（${serverAddress}，${displayOs(Number(serverInfo.os))}）sc query "${ins.identity}"`);
 						const queryResult = await execRemote({
@@ -1852,6 +1881,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 						printInfoLog(`服务状态查询：${serverInfo.name} 为未知部署环境（${displayOs(Number(serverInfo.os))}）`, "log-error");
 					}
 				}
+				lastServerId = ins.serverId;
 				statusCache.set(cacheKey, status);
 			}
 			rows.push({
@@ -1872,6 +1902,24 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			printInfoLog(
 				`服务状态查询完成：${rows.length} 个实例（运行中 ${runningCount} / 已停止 ${stoppedCount} / 未知 ${unknownCount}）`
 			);
+			// 按服务器维度再汇总一行，便于与界面分组核对（单服务器场景不输出，避免冗余）
+			const serverSummaries = new Map<number, { name: string; running: number; total: number }>();
+			for (const row of rows) {
+				const summary = serverSummaries.get(row.serverId) || {
+					name: row.serverName || `ID:${row.serverId}`,
+					running: 0,
+					total: 0,
+				};
+				summary.total += 1;
+				if (row.running === true) summary.running += 1;
+				serverSummaries.set(row.serverId, summary);
+			}
+			if (serverSummaries.size > 1) {
+				const summaryText = [...serverSummaries.values()]
+					.map((item) => `${item.name} 运行中 ${item.running}/${item.total}`)
+					.join("、");
+				printInfoLog(`各服务器：${summaryText}`);
+			}
 		}
 
 		result.code = hasError ? 1 : 0;

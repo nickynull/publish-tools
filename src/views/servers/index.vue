@@ -84,24 +84,28 @@
       >
         <el-table-column type="selection" width="50" />
         <el-table-column fixed type="index" label="序号" width="60" />
-        <el-table-column prop="name" label="服务器名称" width="200" />
+        <el-table-column prop="name" label="服务器名称" width="180" />
         <el-table-column prop="os" label="服务环境" width="100">
           <template #default="scope">
             {{ displayOs(scope.row.os) }}
           </template>
         </el-table-column>
         <el-table-column prop="ip" label="IP地址" width="150" />
-        <el-table-column prop="port" label="SSH端口" width="120" />
         <el-table-column prop="account" label="登录账户" width="120" />
+        <el-table-column prop="port" label="SSH端口" width="120" />
         <!-- <el-table-column prop="pwd" label="登录密码" width="120" /> -->
-        <el-table-column prop="projectName" label="所属项目名称" width="200" />
+        <el-table-column prop="projectName" label="所属项目名称" width="200">
+          <template #default="scope">
+            {{ scope.row.projectName ?? "全部项目" }}
+          </template>
+        </el-table-column>
         <el-table-column
           prop="description"
           label="描述"
           min-width="260"
           show-overflow-tooltip
         />
-        <el-table-column label="操作" width="250" fixed="right">
+        <el-table-column label="操作" width="230" fixed="right">
           <template #default="scope">
             <el-button size="small" text type="success" @click="onCopyServer(scope.row)"
               >复制新增</el-button
@@ -125,22 +129,14 @@
               type="primary"
               :loading="scope.row.loading === true"
               @click="onTestConnect(scope.row)"
-              >{{ !scope.row.loading ? "测试连接" : "连接中" }}</el-button
+              >{{ !scope.row.loading ? "测试" : "连接中" }}</el-button
             >
-            <el-dropdown
-              class="log-dropdown"
-              trigger="click"
-              @command="(type: any) => onViewLog(scope.row, type)"
+            <el-button size="small" text type="primary" @click="onOpenFileManage(scope.row)"
+              >文件管理</el-button
             >
-              <el-button size="small" text type="primary">查看日志</el-button>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item v-for="opt in logOptions" :key="opt.type" :command="opt.type">
-                    {{ opt.label }}
-                  </el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
+            <el-button size="small" text type="primary" @click="onViewLog(scope.row)"
+              >日志</el-button
+            >
             <el-dropdown
               class="log-dropdown"
               trigger="click"
@@ -172,6 +168,7 @@
     </el-card>
     <server-dialog ref="serverDialogRef" @refresh="getTableData()" />
     <server-log-dialog ref="serverLogDialogRef" />
+    <server-file-dialog ref="serverFileDialogRef" />
 
     <!-- 服务发现结果抽屉 -->
     <el-drawer
@@ -275,9 +272,9 @@ import { displayOs } from "@/utils/other";
 import { save } from "@tauri-apps/plugin-dialog";
 import { formatDate } from "@/utils/formatTime";
 import {
-  SERVER_LOG_OPTIONS,
   buildLogFileName,
   buildRemoteLogExistsCommand,
+  getServerLogOption,
   resolveServerLogTarget,
   type ServerLogType,
 } from "@/utils/serverLog";
@@ -298,6 +295,10 @@ const ServerDialog = defineAsyncComponent(
 const serverLogDialogRef = ref();
 const ServerLogDialog = defineAsyncComponent(
   () => import("@/views/servers/components/serverLogDialog.vue")
+);
+const serverFileDialogRef = ref();
+const ServerFileDialog = defineAsyncComponent(
+  () => import("@/views/servers/components/serverFileDialog.vue")
 );
 
 // 项目信息
@@ -383,7 +384,7 @@ const onScanRemote = async () => {
   selectedDiscoveryKeys.value = [];
   discoveryDrawerVisible.value = true;
   await loadDiscoveryPrefixes();
-  await doScanRemote({ ip: `${target.ip}:${target.port}`, account: target.account, pwd: target.pwd });
+  await doScanRemote({ ip: target.ip, port: target.port, account: target.account, pwd: target.pwd, os: target.os });
 };
 
 const onConfirmImport = async () => {
@@ -563,16 +564,20 @@ const onInvokeCommand = (row: RowServerType) => {
 
 // ============ 服务器日志（查看 / 下载） ============
 // 四类操作日志由 STEP 发布流程写入服务器，路径取自服务器的服务备份路径 / 程序集暂存路径
-const logOptions = SERVER_LOG_OPTIONS;
+// 查看：统一收进日志窗口（按页签查看，页签内可下载当前页签的完整日志文件）
+// 下载：保留表格行的下载下拉，行为与菜单顺序都不变
+/** 下载下拉菜单顺序（沿用改造前顺序，与日志窗口页签顺序无关） */
+const LOG_DOWNLOAD_ORDER: ServerLogType[] = ["backup", "restore", "upload", "publish"];
+const logOptions = LOG_DOWNLOAD_ORDER.map((type) => getServerLogOption(type));
 
-// 查看日志：弹窗展示对应日志最新 100 行
-const onViewLog = (row: RowServerType, type: ServerLogType) => {
-  const target = resolveServerLogTarget(row, type);
-  if (!target.ok) {
-    ElMessage.warning(target.message);
-    return;
-  }
-  serverLogDialogRef.value?.openDialog(row, type);
+// 查看日志：打开日志窗口（默认「发布」页签，其余页签激活时才加载）
+const onViewLog = (row: RowServerType) => {
+  serverLogDialogRef.value?.openDialog(row);
+};
+
+// 文件管理：打开上传/浏览弹窗（候选路径取自服务器的「文件管理路径」配置）
+const onOpenFileManage = (row: RowServerType) => {
+  serverFileDialogRef.value?.openDialog(row);
 };
 
 // 下载日志：选择本地保存路径后通过 SFTP 下载
@@ -882,7 +887,7 @@ onMounted(async () => {
       flex: 1;
     }
   }
-  // 表格操作列内的日志下拉按钮：与相邻文字按钮间距对齐 el-button + el-button 的 12px
+  // 表格操作列内的日志下载下拉：与相邻文字按钮间距对齐 el-button + el-button 的 12px
   .log-dropdown {
     margin-left: 12px;
     vertical-align: middle;

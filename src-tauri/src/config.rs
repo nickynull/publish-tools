@@ -56,11 +56,47 @@ impl Default for McpConfig {
     }
 }
 
-/// 应用配置（包含 MCP 配置）
+/// 关闭窗口按钮行为：最小化到系统托盘（隐藏主窗口，程序继续驻留托盘）
+pub const CLOSE_BEHAVIOR_MINIMIZE: &str = "minimize";
+/// 关闭窗口按钮行为：退出程序
+pub const CLOSE_BEHAVIOR_EXIT: &str = "exit";
+
+/// 窗口行为配置（存储在 config.json）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WindowConfig {
+    /// 关闭窗口按钮（右上角 ×）行为：minimize / exit
+    #[serde(default = "default_close_behavior")]
+    pub close_behavior: String,
+}
+
+fn default_close_behavior() -> String {
+    CLOSE_BEHAVIOR_MINIMIZE.to_string()
+}
+
+impl Default for WindowConfig {
+    fn default() -> Self {
+        Self {
+            close_behavior: default_close_behavior(),
+        }
+    }
+}
+
+/// 归一化关闭行为取值：仅 exit 为退出，其余（含非法值/空值）一律按 minimize 处理。
+/// 安全侧偏保守——误配置不会让程序无法驻留托盘。
+pub fn normalize_close_behavior(value: &str) -> String {
+    match value.trim() {
+        CLOSE_BEHAVIOR_EXIT => CLOSE_BEHAVIOR_EXIT.to_string(),
+        _ => CLOSE_BEHAVIOR_MINIMIZE.to_string(),
+    }
+}
+
+/// 应用配置（包含 MCP 配置、窗口行为配置）
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     #[serde(default)]
     pub mcp: McpConfig,
+    #[serde(default)]
+    pub window: WindowConfig,
 }
 
 /// 获取 config.json 文件路径
@@ -117,6 +153,19 @@ pub fn update_mcp_config(
     }
     if let Some(port) = mcp_port {
         config.mcp.mcp_port = port;
+    }
+    save(app_handle, &config)?;
+    Ok(config)
+}
+
+/// 更新窗口行为配置字段（关闭按钮行为），返回更新后的完整配置
+pub fn update_window_config(
+    app_handle: &tauri::AppHandle,
+    close_behavior: Option<String>,
+) -> Result<AppConfig, String> {
+    let mut config = load(app_handle);
+    if let Some(behavior) = close_behavior {
+        config.window.close_behavior = normalize_close_behavior(&behavior);
     }
     save(app_handle, &config)?;
     Ok(config)

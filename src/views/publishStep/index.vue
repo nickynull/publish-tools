@@ -63,14 +63,23 @@
                         <!-- 当前项目 -->
                         <div class="project-card">
                             <div class="project-select-row">
-                                <div class="project-select-label">发布项目环境</div>
+                                <div class="project-select-label">发布项目</div>
                                 <el-select filterable placeholder="请选择要发布的项目" size="default"
                                     v-model="state.publishData.projectId" class="w100" :disabled="isAnyLoading"
                                     @change="onProjectChange">
                                     <el-option v-for="project in projectList" :key="project.id" :label="project.name"
                                         :value="project.id" />
                                 </el-select>
-                                <el-tag>{{ displayEnvironment(state.publishData.environment) }}</el-tag>
+                            </div>
+                            <div class="project-select-row project-env-row">
+                                <div class="project-select-label">发布环境</div>
+                                <el-radio-group size="default" :disabled="isAnyLoading"
+                                    v-model="state.publishData.environment" @change="onEnvironmentChange">
+                                    <el-radio border :value="1">Dev</el-radio>
+                                    <el-radio border :value="2">Uat</el-radio>
+                                    <el-radio border :value="3">Pro</el-radio>
+                                    <el-radio border :value="4">Other</el-radio>
+                                </el-radio-group>
                             </div>
                         </div>
 
@@ -199,9 +208,9 @@
                                         <th colspan="2" class="t-align-c">{{ server.name }}</th>
                                     </tr>
                                     <tr>
-                                        <td colspan="2" class="t-align-c">
-                                            <table
-                                                class="table-appconfig table-appconfig-shadow-none mt10 mb10 t-border-none"
+                                        <td colspan="2" class="t-align-c t-p-0">
+                                            <!-- 服务小表与服务标识同宽（单元格内边距归零）；服务器名 / 服务小表 / 下一个服务器名之间均无外边距，整块连成一片 -->
+                                            <table class="table-appconfig table-appconfig-shadow-none t-border-none"
                                                 cellpadding="0" cellspacing="0"
                                                 v-for="(serverVal, valIndex) in getServerValues(server)"
                                                 :key="valIndex">
@@ -296,7 +305,7 @@
         </div>
 
         <!-- 服务管理对话框 -->
-        <el-dialog v-model="serviceStatusVisible" title="服务管理" width="1080px" draggable>
+        <el-dialog v-model="serviceStatusVisible" title="服务管理" width="1120px" draggable class="status-dialog">
             <div class="status-batch-bar">
                 <el-button size="small" type="danger" :disabled="!selectedStatusRows.length || serviceStatusOperating"
                     @click="onBatchControlService('stop')">批量停止</el-button>
@@ -306,36 +315,62 @@
                     @click="onBatchControlService('restart')">批量重启</el-button>
                 <el-button size="small" type="danger" text :icon="VideoPause" :disabled="!isDialogOperating"
                     title="停止当前查询/服务操作" @click="onStopDialogOp">停止</el-button>
-                <span class="status-batch-tip">勾选后可批量操作；操作日志记录在「总体日志」中</span>
+                <span class="status-batch-tip">勾选服务或整个服务器可批量操作；操作日志记录在「总体日志」中</span>
+                <div class="status-collapse-bar">
+                    <el-button size="small" text @click="onExpandAllGroups">全部展开</el-button>
+                    <el-button size="small" text @click="onCollapseAllGroups">全部折叠</el-button>
+                </div>
             </div>
-            <el-table :data="serviceStatusRows" size="default" border v-loading="serviceStatusLoading"
-                class="status-table" @selection-change="onStatusSelectionChange">
-                <el-table-column type="selection" width="45" :selectable="canOperateStatusRow" />
-                <el-table-column type="index" label="序号" width="60" />
-                <el-table-column prop="module" label="应用类型" width="130" />
-                <el-table-column prop="serverName" label="服务器" min-width="120" />
-                <el-table-column prop="identity" label="服务标识" min-width="250" />
-                <el-table-column label="状态" width="100">
-                    <template #default="scope">
-                        <el-tag v-if="scope.row.running === true" type="success">运行中</el-tag>
-                        <el-tag v-else-if="scope.row.running === false" type="danger">已停止</el-tag>
-                        <el-tag v-else type="info">{{ scope.row.statusText }}</el-tag>
-                    </template>
-                </el-table-column>
-                <el-table-column label="操作" width="200">
-                    <template #default="scope">
-                        <el-button size="small" type="danger"
-                            :disabled="!canOperateStatusRow(scope.row) || serviceStatusOperating"
-                            @click="onControlService(scope.row, 'stop')">停止</el-button>
-                        <el-button size="small" type="primary"
-                            :disabled="!canOperateStatusRow(scope.row) || serviceStatusOperating"
-                            @click="onControlService(scope.row, 'start')">启动</el-button>
-                        <el-button size="small" type="warning"
-                            :disabled="!canOperateStatusRow(scope.row) || serviceStatusOperating"
-                            @click="onControlService(scope.row, 'restart')">重启</el-button>
-                    </template>
-                </el-table-column>
-            </el-table>
+            <div class="status-groups" v-loading="serviceStatusLoading" element-loading-text="正在查询服务状态…">
+                <!-- 空数据占位：加载中也占位，保证 loading 遮罩有高度、可见 -->
+                <div v-if="!statusGroups.length" class="status-empty">
+                    <el-empty :description="serviceStatusLoading ? '' : '暂无服务状态数据'" :image-size="70" />
+                </div>
+                <div class="status-group" v-for="group in statusGroups" :key="group.serverId">
+                    <div class="status-group-head" @click="onToggleServerCollapse(group.serverId)">
+                        <el-checkbox class="status-check" :model-value="group.checked"
+                            :indeterminate="group.indeterminate" :disabled="!group.operableCount || serviceStatusOperating"
+                            :title="`勾选后批量操作整台服务器（${group.operableCount} 个可操作服务）`" @click.stop
+                            @change="(value: boolean | string | number) => onToggleGroup(group, Boolean(value))" />
+                        <span class="status-group-title">{{ group.serverName }}</span>
+                        <el-tag size="small"
+                            :type="group.runningCount === group.total ? 'success' : group.runningCount > 0 ? 'warning' : 'info'">
+                            运行中 {{ group.runningCount }}/{{ group.total }}
+                        </el-tag>
+                        <span v-if="group.unknownCount" class="status-group-extra">未知 {{ group.unknownCount }}</span>
+                        <span class="status-group-extra">{{ group.total }} 个服务</span>
+                        <el-icon class="status-collapse-icon" :class="{ 'is-collapsed': isServerCollapsed(group.serverId) }"
+                            :title="isServerCollapsed(group.serverId) ? '展开该服务器' : '折叠该服务器'">
+                            <CaretBottom />
+                        </el-icon>
+                    </div>
+                    <el-collapse-transition>
+                        <div v-show="!isServerCollapsed(group.serverId)" class="status-group-body">
+                            <div class="status-row" v-for="row in group.rows" :key="rowRenderKey(row)">
+                                <el-checkbox class="status-check" :model-value="isRowSelected(row)"
+                                    :disabled="!canOperateStatusRow(row) || serviceStatusOperating"
+                                    @change="(value: boolean | string | number) => onToggleRow(row, Boolean(value))" />
+                                <span class="status-row-module" :title="row.module">{{ row.module }}</span>
+                                <span class="status-row-identity" :title="row.identity">{{ row.identity }}</span>
+                                <el-tag v-if="row.running === true" size="small" type="success">运行中</el-tag>
+                                <el-tag v-else-if="row.running === false" size="small" type="danger">已停止</el-tag>
+                                <el-tag v-else size="small" type="info">{{ row.statusText }}</el-tag>
+                                <div class="status-row-ops">
+                                    <el-button size="small" type="danger"
+                                        :disabled="!canOperateStatusRow(row) || serviceStatusOperating"
+                                        @click="onControlService(row, 'stop')">停止</el-button>
+                                    <el-button size="small" type="primary"
+                                        :disabled="!canOperateStatusRow(row) || serviceStatusOperating"
+                                        @click="onControlService(row, 'start')">启动</el-button>
+                                    <el-button size="small" type="warning"
+                                        :disabled="!canOperateStatusRow(row) || serviceStatusOperating"
+                                        @click="onControlService(row, 'restart')">重启</el-button>
+                                </div>
+                            </div>
+                        </div>
+                    </el-collapse-transition>
+                </div>
+            </div>
             <template #footer>
                 <el-button @click="serviceStatusVisible = false">关闭</el-button>
             </template>
@@ -747,6 +782,9 @@ const stepPublishApi = useStepPublish(
 // 应用配置弹框环境变更
 const onAppConfigEnvChange = (newEnv: number) => {
     state.publishData.environment = newEnv;
+    if (state.publishData.projectId) {
+        saveEnvironmentToStorage(Number(state.publishData.projectId), Number(newEnv));
+    }
 };
 
 // 应用配置弹框项目变更（弹窗内切换项目管理后保存时同步到发布信息）
@@ -968,14 +1006,115 @@ const serviceStatusLoading = ref(false);
 const serviceStatusRows = ref<ServiceStatusRow[]>([]);
 // 服务操作（停止/启动/重启）
 const serviceStatusOperating = ref(false);
-const selectedStatusRows = ref<ServiceStatusRow[]>([]);
-const onStatusSelectionChange = (rows: ServiceStatusRow[]) => {
-    selectedStatusRows.value = rows;
-};
 // 仅状态已知（运行中/已停止）的行可操作
 const canOperateStatusRow = (row: ServiceStatusRow) => {
     return Boolean(row.serverId) && row.running !== null;
 };
+
+// 服务管理：按「服务器」分组（服务器内所有服务同级平铺），勾选与折叠状态由页面自管
+type StatusServerGroup = {
+    serverId: number;
+    serverName: string;
+    rows: ServiceStatusRow[];
+    total: number;
+    runningCount: number;
+    unknownCount: number;
+    operableCount: number;
+    selectedCount: number;
+    checked: boolean;
+    indeterminate: boolean;
+};
+// 选中/操作粒度：同一个服务（服务器 + 服务标识）；渲染 key 再带模块名，避免同服务被多模块引用时 key 重复
+const rowKey = (row: ServiceStatusRow) => `${row.serverId}|${row.identity}`;
+const rowRenderKey = (row: ServiceStatusRow) => `${row.serverId}|${row.module}|${row.identity}`;
+const selectedStatusKeys = ref<Set<string>>(new Set());
+// 折叠状态：只折叠服务器卡片（服务器内服务统一同级展示，不做二级折叠）
+const collapsedServers = ref<Set<number>>(new Set());
+const isRowSelected = (row: ServiceStatusRow) => selectedStatusKeys.value.has(rowKey(row));
+const selectedStatusRows = computed(() => {
+    // 同一服务被多模块引用时只保留一行，避免批量操作对同一服务重复执行
+    const seen = new Set<string>();
+    const rows: ServiceStatusRow[] = [];
+    for (const row of serviceStatusRows.value) {
+        const key = rowKey(row);
+        if (seen.has(key) || !selectedStatusKeys.value.has(key) || !canOperateStatusRow(row)) continue;
+        seen.add(key);
+        rows.push(row);
+    }
+    return rows;
+});
+const statusGroups = computed<StatusServerGroup[]>(() => {
+    const groups: StatusServerGroup[] = [];
+    const serverMap = new Map<number, StatusServerGroup>();
+    for (const row of serviceStatusRows.value) {
+        let group = serverMap.get(row.serverId);
+        if (!group) {
+            group = {
+                serverId: row.serverId,
+                serverName: row.serverName || `服务器 ID:${row.serverId}`,
+                rows: [],
+                total: 0,
+                runningCount: 0,
+                unknownCount: 0,
+                operableCount: 0,
+                selectedCount: 0,
+                checked: false,
+                indeterminate: false,
+            };
+            serverMap.set(row.serverId, group);
+            groups.push(group);
+        }
+        group.rows.push(row);
+        group.total += 1;
+        if (row.running === true) group.runningCount += 1;
+        if (row.running === null) group.unknownCount += 1;
+        if (canOperateStatusRow(row)) {
+            group.operableCount += 1;
+            if (selectedStatusKeys.value.has(rowKey(row))) group.selectedCount += 1;
+        }
+    }
+    for (const group of groups) {
+        group.checked = group.operableCount > 0 && group.selectedCount === group.operableCount;
+        group.indeterminate = group.selectedCount > 0 && group.selectedCount < group.operableCount;
+    }
+    return groups;
+});
+// 选中集合整体替换引用，保证 computed 重新求值
+const updateSelectedKeys = (keys: string[], selected: boolean) => {
+    const next = new Set(selectedStatusKeys.value);
+    for (const key of keys) {
+        if (selected) next.add(key);
+        else next.delete(key);
+    }
+    selectedStatusKeys.value = next;
+};
+const operableRowKeys = (rows: ServiceStatusRow[]) =>
+    rows.filter((row) => canOperateStatusRow(row)).map((row) => rowKey(row));
+const onToggleRow = (row: ServiceStatusRow, selected: boolean) => {
+    if (!canOperateStatusRow(row)) return;
+    updateSelectedKeys([rowKey(row)], selected);
+};
+const onToggleGroup = (group: StatusServerGroup, selected: boolean) => {
+    updateSelectedKeys(operableRowKeys(group.rows), selected);
+};
+const isServerCollapsed = (serverId: number) => collapsedServers.value.has(serverId);
+const onToggleServerCollapse = (serverId: number) => {
+    const next = new Set(collapsedServers.value);
+    if (next.has(serverId)) next.delete(serverId);
+    else next.add(serverId);
+    collapsedServers.value = next;
+};
+const onExpandAllGroups = () => {
+    collapsedServers.value = new Set();
+};
+const onCollapseAllGroups = () => {
+    collapsedServers.value = new Set(statusGroups.value.map((group) => group.serverId));
+};
+const resetStatusGroupsState = () => {
+    selectedStatusKeys.value = new Set();
+    collapsedServers.value = new Set();
+};
+
 const statusActionText: Record<string, string> = { stop: "停止", start: "启动", restart: "重启" };
 const runControlService = async (rows: ServiceStatusRow[], action: "stop" | "start" | "restart") => {
     const validRows = rows.filter((row) => canOperateStatusRow(row));
@@ -1010,7 +1149,7 @@ const runControlService = async (rows: ServiceStatusRow[], action: "stop" | "sta
         if (!stopBreak) {
             const refreshResult = await stepPublishApi.getServiceStatuses();
             serviceStatusRows.value = refreshResult.data || [];
-            selectedStatusRows.value = [];
+            selectedStatusKeys.value = new Set();
         }
         if (stopBreak) {
             ElMessage.warning(`${statusActionText[action]}已手动停止，剩余服务操作已中止，详见「总体日志」`);
@@ -1041,6 +1180,8 @@ const onShowServiceStatus = async (index: number) => {
     serviceStatusLoading.value = true;
     serviceStatusVisible.value = true;
     serviceStatusRows.value = [];
+    // 每次打开默认全展开、无勾选
+    resetStatusGroupsState();
     try {
         await loadPublishSettings();
         const result = await stepPublishApi.getServiceStatuses();
@@ -1418,6 +1559,7 @@ const getProjectDefault = async (options?: { keepCurrentEnvironment?: boolean })
             }
         }
         state.publishData.environment = targetEnvironment;
+        saveEnvironmentToStorage(projectId, targetEnvironment);
     }
     await getPublishAppconfigs();
 };
@@ -1448,6 +1590,27 @@ const restoreEnvironmentFromStorage = (projectId: number): number | null => {
     } catch (error) {
         console.error("恢复环境选择失败:", error);
         return null;
+    }
+};
+
+// 保存环境选择到本地存储（按项目维度，刷新/重置后可恢复上次选择）
+const saveEnvironmentToStorage = (projectId: number, environment: number) => {
+    try {
+        localStorage.setItem(`project_environment_${projectId}`, String(environment));
+    } catch (error) {
+        console.error("保存环境选择失败:", error);
+    }
+};
+
+// 环境切换：持久化 + 按「项目+环境」唯一重新取应用配置
+const onEnvironmentChange = async (val: number) => {
+    if (!state.publishData.projectId) return;
+    saveEnvironmentToStorage(Number(state.publishData.projectId), Number(val));
+    await getPublishAppconfigs();
+    if (!state.publishData.appconfigData.id) {
+        ElMessage.warning(
+            `该项目在[${displayEnvironment(Number(val))}]环境暂无应用配置，请先到[应用配置]中新增。`
+        );
     }
 };
 
@@ -1515,6 +1678,7 @@ const onProjectChange = async (val: number) => {
         } else {
             state.publishData.environment = 1;
         }
+        saveEnvironmentToStorage(val, state.publishData.environment);
     }
     await getPublishAppconfigs();
 };
@@ -1699,7 +1863,9 @@ $log-console-text: #ffffff;
 
                     .table-appconfig {
                         width: 100%;
-                        border: 1px solid var(--el-color-info);
+                        // 表格外框：原来的 --el-color-info(#909399) 太抢眼，改取 info 浅色档(#c8c9cc)，
+                        // 比单元格分隔线(--el-border-color-lighter #ebeef5)明显一档，卡片轮廓仍清晰
+                        border: 1px solid var(--el-color-info-light-5);
 
                         .table-head-row {
                             td {
@@ -1896,6 +2062,19 @@ $log-console-text: #ffffff;
                     text-align: right;
                 }
             }
+
+            // 发布环境单选组：紧凑排列，避免默认 30px 间距在卡片内换行
+            .project-env-row {
+                :deep(.el-radio-group) {
+                    flex: 1;
+                    flex-wrap: wrap;
+                    row-gap: 0.4rem;
+                }
+                :deep(.el-radio) {
+                    margin-right: 0.5rem;
+                    font-weight: 400;
+                }
+            }
         }
     }
 
@@ -1907,6 +2086,11 @@ $log-console-text: #ffffff;
     // 配置表单元格工具类
     .t-align-c {
         text-align: center !important;
+    }
+
+    // 单元格内边距归零：让内嵌小表与外层单元格同宽（用于「服务器 → 服务标识/发布路径」）
+    .t-p-0 {
+        padding: 0 !important;
     }
 
     .t-border-none {
@@ -1925,6 +2109,11 @@ $log-console-text: #ffffff;
             cursor: pointer;
         }
     }
+}
+
+// 深色模式：应用类型表格外框取的是 info 浅色档（不随主题重映射），需单独压暗到深色边框色，避免白线刺眼
+[data-theme='dark'] .card-item-appconfig .table-appconfig {
+    border-color: var(--next-border-color) !important;
 }
 
 // 下拉菜单挂在 body（teleport），需用全局样式
@@ -1946,9 +2135,8 @@ $log-console-text: #ffffff;
     }
 }
 
-// el-table 单元格：超出宽度时换行显示（待发布程序集 / 服务状态共用）
-.staging-table,
-.status-table {
+// el-table 单元格：超出宽度时换行显示（待发布程序集 / 服务备份 / 核对程序集共用）
+.staging-table {
     :deep(.cell) {
         white-space: normal;
         word-break: break-all;
@@ -1999,10 +2187,20 @@ $log-console-text: #ffffff;
     color: var(--el-text-color-secondary);
 }
 
+// 服务状态对话框：内容区最小高度 600（短内容不抖动），超高时内部滚动；loading 遮罩铺满该区域
+// el-dialog 内容 teleport 到 body，用 :global 保证选择器命中（class 落在 el-overlay 上）
+:global(.status-dialog .el-dialog__body) {
+    min-height: 50vh;
+    max-height: 75vh;
+    display: flex;
+    flex-direction: column;
+}
+
 // 服务状态对话框：批量操作栏
 .status-batch-bar {
     display: flex;
     align-items: center;
+    flex-shrink: 0;
     gap: 0.25rem;
     margin-bottom: 0.625rem;
 
@@ -2011,5 +2209,120 @@ $log-console-text: #ffffff;
         font-size: 0.75rem;
         color: var(--el-text-color-secondary);
     }
+
+    .status-collapse-bar {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        flex-shrink: 0;
+    }
+}
+
+// 服务状态对话框：服务器分组卡片（服务器内服务同级平铺，仅服务器卡片可折叠）
+.status-groups {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 0.25rem;
+}
+
+// 空数据/加载中占位：固定占位高度，保证 v-loading 遮罩可见
+.status-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.status-group {
+    border: 1px solid var(--el-border-color-lighter);
+    border-radius: 4px;
+    margin-bottom: 0.75rem;
+    overflow: hidden;
+
+    &:last-child {
+        margin-bottom: 0;
+    }
+}
+
+.status-group-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--el-fill-color-light);
+    cursor: pointer;
+    user-select: none;
+    transition: background-color 0.2s ease;
+
+    &:hover {
+        background: var(--el-fill-color);
+    }
+
+    .status-group-title {
+        font-size: 0.9375rem;
+        font-weight: 600;
+    }
+
+    .status-group-extra {
+        font-size: 0.75rem;
+        color: var(--el-text-color-secondary);
+    }
+}
+
+.status-collapse-icon {
+    margin-left: auto;
+    flex-shrink: 0;
+    color: var(--el-text-color-secondary);
+    transition: transform 0.2s ease;
+
+    &.is-collapsed {
+        transform: rotate(-90deg);
+    }
+}
+
+.status-row {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.375rem 0.75rem;
+
+    &:hover {
+        background: var(--el-fill-color-lighter);
+    }
+
+    .status-row-module {
+        width: 7.5rem;
+        flex-shrink: 0;
+        font-size: var(--el-font-size-base);
+        line-height: 1.375rem;
+        color: var(--el-text-color-secondary);
+        word-break: break-all;
+    }
+
+    .status-row-identity {
+        flex: 1;
+        min-width: 0;
+        font-size: var(--el-font-size-base);
+        line-height: 1.375rem;
+        word-break: break-all;
+    }
+
+    .status-row-ops {
+        margin-left: auto;
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+
+        :deep(.el-button + .el-button) {
+            margin-left: 0;
+        }
+    }
+}
+
+// 分组头/行内的复选框：去掉 el-checkbox 默认右外边距与固定高度，避免撑高行
+.status-check {
+    margin-right: 0;
+    height: auto;
 }
 </style>

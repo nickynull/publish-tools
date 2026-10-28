@@ -402,8 +402,10 @@ pub async fn discover_remote_docker_containers(
         };
 
         let mounts = parse_docker_inspect_mounts(mounts_json);
-        // 处理空 Source 已在 parse 中过滤，此处首个 Source 即为建议目录
-        let suggested = mounts.first().map(|m| m.source.clone()).unwrap_or_default();
+        // 按启发式评分挑选最可能是发布目录的挂载（多挂载时不能简单取首个）
+        let suggested = pick_publish_mount(&mounts, &working_dir)
+            .map(|m| m.source.clone())
+            .unwrap_or_default();
         // 无挂载时前端需展示 WorkingDir，此处将原始 mounts_json 与 working_dir 拼到 raw_path 供前端备用
         let raw_path = if mounts_json.trim().is_empty() || mounts_json.trim() == "null" {
             working_dir.clone()
@@ -424,6 +426,49 @@ pub async fn discover_remote_docker_containers(
     }
 
     Ok(items)
+}
+
+/// 从容器挂载中挑选最可能是「发布目录」的挂载
+///
+/// 多挂载容器（如同时挂字体、配置、应用目录）不能简单取首个，按以下启发式评分（越高越好）：
+/// - Destination 等于容器工作目录（WorkingDir）：+100
+/// - 容器工作目录位于 Destination 之下：+60
+/// - Destination 命中系统/公共目录黑名单（/usr/share、/etc、/tmp 等）：-80
+/// - Source 与 Destination 完全相同（多为系统资源共享，如 /usr/share/fonts）：-20
+/// - Source 为 docker named volume 目录（/var/lib/docker/volumes/...）：-60
+/// - Destination 路径段越多加微量分（深路径更可能是应用专属目录）
+///
+/// 同分时取靠前的挂载（保持原始顺序稳定）。
+fn pick_publish_mount<'a>(mounts: &'a [Mount], working_dir: &str) -> Option<&'a Mount> {
+    mounts.iter().enumerate().max_by_key(|(idx, m)| {
+        let mut score = 0i32;
+        let dest = m.destination.trim_end_matches('/');
+        let wd = working_dir.trim_end_matches('/');
+        if !wd.is_empty() {
+            if dest == wd {
+                score += 100; // 挂载点即容器工作目录
+            } else if wd.starts_with(&format!("{dest}/")) {
+                score += 60; // 工作目录位于挂载点之下
+            }
+        }
+        const BLACKLIST: [&str; 9] = [
+            "/", "/proc", "/sys", "/dev", "/run", "/tmp", "/var/log", "/etc", "/usr/share",
+        ];
+        if BLACKLIST
+            .iter()
+            .any(|b| dest == *b || (b.len() > 1 && dest.starts_with(&format!("{b}/"))))
+        {
+            score -= 80;
+        }
+        if m.source.trim_end_matches('/') == dest {
+            score -= 20;
+        }
+        if m.source.contains("/docker/volumes/") || m.source.starts_with("/var/lib/docker/") {
+            score -= 60;
+        }
+        score += dest.matches('/').count() as i32;
+        (score, std::cmp::Reverse(*idx))
+    }).map(|(_, m)| m)
 }
 
 #[cfg(test)]
@@ -477,6 +522,82 @@ mod tests {
         let m = parse_docker_inspect_mounts(j);
         assert_eq!(m.len(), 1);
         assert_eq!(m[0].source, "/data/ok");
+    }
+    #[test]
+    fn pick_mount_prefers_working_dir_over_font_mount() {
+        // 截图场景：字体挂载在前，应用挂载在后（WorkingDir=/webclient）
+        let mounts = vec![
+            Mount {
+                source: "/usr/share/fonts".into(),
+                destination: "/usr/share/fonts".into(),
+            },
+            Mount {
+                source: "/data/smom/server/webclient".into(),
+                destination: "/webclient".into(),
+            },
+        ];
+        let picked = pick_publish_mount(&mounts, "/webclient").unwrap();
+        assert_eq!(picked.source, "/data/smom/server/webclient");
+    }
+    #[test]
+    fn pick_mount_without_working_dir_avoids_system_mounts() {
+        let mounts = vec![
+            Mount {
+                source: "/usr/share/fonts".into(),
+                destination: "/usr/share/fonts".into(),
+            },
+            Mount {
+                source: "/data/smom/server/webapi".into(),
+                destination: "/webapi".into(),
+            },
+        ];
+        let picked = pick_publish_mount(&mounts, "").unwrap();
+        assert_eq!(picked.source, "/data/smom/server/webapi");
+    }
+    #[test]
+    fn pick_mount_prefers_deeper_app_destination() {
+        let mounts = vec![
+            Mount {
+                source: "/data/share".into(),
+                destination: "/data".into(),
+            },
+            Mount {
+                source: "/data/smom/server/schedule".into(),
+                destination: "/app/schedule".into(),
+            },
+        ];
+        let picked = pick_publish_mount(&mounts, "").unwrap();
+        assert_eq!(picked.source, "/data/smom/server/schedule");
+    }
+    #[test]
+    fn pick_mount_penalizes_named_volume() {
+        let mounts = vec![
+            Mount {
+                source: "/var/lib/docker/volumes/abc/_data".into(),
+                destination: "/app".into(),
+            },
+            Mount {
+                source: "/data/smom/server/webapi".into(),
+                destination: "/webapi".into(),
+            },
+        ];
+        let picked = pick_publish_mount(&mounts, "").unwrap();
+        assert_eq!(picked.source, "/data/smom/server/webapi");
+    }
+    #[test]
+    fn pick_mount_tie_keeps_first() {
+        let mounts = vec![
+            Mount {
+                source: "/data/a".into(),
+                destination: "/a".into(),
+            },
+            Mount {
+                source: "/data/b".into(),
+                destination: "/b".into(),
+            },
+        ];
+        let picked = pick_publish_mount(&mounts, "").unwrap();
+        assert_eq!(picked.source, "/data/a");
     }
     #[test]
     fn discovery_item_serde_camel_case() {

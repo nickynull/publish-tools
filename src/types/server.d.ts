@@ -13,6 +13,13 @@ declare type SelectServerType = {
 	serverPathArr: ServerOptionType[];
 }
 
+// 服务器默认服务路径组（含服务类型，应用配置选择服务器后按类型带出）
+declare type ServerDefaultPathType = {
+	serviceType: string | null; // WebApiHost / ScheduleServer / WebClient / WpfClient / SpcMonitor，空 = 通用（带出到所有服务）
+	identity: string | null;
+	path: string | null;
+}
+
 // server
 declare type RowServerType = {
 	id: number | null;
@@ -27,6 +34,8 @@ declare type RowServerType = {
 	description: string | null;
 	serviceBackupPath?: string | null;   // 服务备份路径：存放备份文件的目录
 	assemblyStagingPath?: string | null; // 程序集暂存路径：存放将要发布的程序集的目录
+	defaultServerPaths?: ServerDefaultPathType[] | null; // 默认服务标识/发布路径组（多组，应用配置按服务类型快速带出）
+	uploadPaths?: string[] | null; // 文件管理路径（多组，文件管理弹窗作为候选路径）
 	sourceKey?: string | null;   // SSH MCP 同步来源键（项目/环境/主机），有值=已纳管
 	loading?: boolean | null;
 };

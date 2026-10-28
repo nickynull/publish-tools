@@ -1,4 +1,7 @@
-use crate::cmd_module::cancel::{check_cancelled, is_cancelled, sleep_with_cancel, CANCELLED_MSG};
+use crate::cmd_module::cancel::{
+    check_cancelled, check_file_cancelled, is_cancelled, is_file_cancelled, sleep_with_cancel,
+    sleep_with_file_cancel, CANCELLED_MSG, FILE_OP_CANCELLED_MSG,
+};
 use crate::cmd_module::ssh_pool;
 use crate::utils::compression::{
     copy_with_progress, create_zip, scan_zip_sources, unzip_files, with_mtime,
@@ -1158,11 +1161,13 @@ pub async fn delete_dir(path: &str) -> Result<bool, String> {
 /// * `server` - 远程服务器地址
 /// * `remote_paths` - 远程文件路径
 /// * `local_paths` - 本地文件路径
+/// * `cancel_scope` - 取消范围：`"file"` 认文件操作终止标记，其余认发布停止标记
 ///
 /// # Returns
 /// * `Ok(true)` 成功
 /// * `Err(String)` 失败
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn download_server_files(
     app: tauri::AppHandle,
     local_paths: Vec<String>,
@@ -1170,12 +1175,27 @@ pub async fn download_server_files(
     username: &str,
     password: &str,
     server: &str,
+    retry_count: Option<u32>,
+    retry_interval_secs: Option<u64>,
+    cancel_scope: Option<String>,
 ) -> Result<bool, String> {
     let mut progress = ProgressState::new(Some(&app));
+    // 文件管理弹窗发起的下载用独立标记，避免与发布「停止」互相打断
+    let file_scope = cancel_scope.as_deref() == Some("file");
+    // retry_count = None → 内建默认 3 次/2s（直连调用点行为不变）；前端重试包装传 1 单发，重试由前端控制
+    let max_attempts = retry_count.unwrap_or(MAX_RETRIES).max(1);
+    let delay = retry_interval_secs
+        .filter(|s| *s > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(RETRY_DELAY);
     let mut attempts = 0;
     let mut err_msg = String::new();
-    while attempts < MAX_RETRIES {
-        check_cancelled()?;
+    while attempts < max_attempts {
+        if file_scope {
+            check_file_cancelled()?;
+        } else {
+            check_cancelled()?;
+        }
         match exec_download_server_files(
             local_paths.clone(),
             remote_paths.clone(),
@@ -1183,22 +1203,38 @@ pub async fn download_server_files(
             password,
             server,
             &mut progress,
+            file_scope,
         )
         .await
         {
             Ok(output) => return Ok(output),
             Err(e) => {
+                // 主动终止不再重试，原样返回（前端据文案标记「已终止 / 已停止」）
+                if e == CANCELLED_MSG || e == FILE_OP_CANCELLED_MSG {
+                    return Err(e);
+                }
                 attempts += 1;
                 emit_retry(
                     Some(&app),
                     "下载文件",
                     attempts,
-                    MAX_RETRIES,
-                    attempts < MAX_RETRIES,
+                    max_attempts,
+                    attempts < max_attempts,
                     &e,
                 );
-                if attempts < MAX_RETRIES && !sleep_with_cancel(RETRY_DELAY) {
-                    return Err(CANCELLED_MSG.to_string());
+                if attempts < max_attempts {
+                    let slept = if file_scope {
+                        sleep_with_file_cancel(delay)
+                    } else {
+                        sleep_with_cancel(delay)
+                    };
+                    if !slept {
+                        return Err(if file_scope {
+                            FILE_OP_CANCELLED_MSG.to_string()
+                        } else {
+                            CANCELLED_MSG.to_string()
+                        });
+                    }
                 }
                 err_msg = e.to_string();
             }
@@ -1217,10 +1253,12 @@ pub async fn download_server_files(
 /// * `server` - 远程服务器地址
 /// * `remote_paths` - 远程文件路径
 /// * `local_paths` - 本地文件路径
+/// * `file_scope` - 是否使用文件操作取消标记（文件管理弹窗下载时为 true）
 ///
 /// # Returns
 /// * `Ok(true)` 成功
 /// * `Err(String)` 失败
+#[allow(clippy::too_many_arguments)]
 async fn exec_download_server_files(
     local_paths: Vec<String>,
     remote_paths: Vec<String>,
@@ -1228,6 +1266,7 @@ async fn exec_download_server_files(
     password: &str,
     server: &str,
     progress: &mut ProgressState,
+    file_scope: bool,
 ) -> Result<bool, String> {
     if local_paths.len() != remote_paths.len() {
         return Err("本地路径和远程路径的数量必须相同.".into());
@@ -1270,6 +1309,7 @@ async fn exec_download_server_files(
                             progress,
                             file_index,
                             file_total,
+                            file_scope,
                         )
                         .map_err(|e| format!("下载文件[{}]失败！{}", entry_path.display(), e))?;
                     }
@@ -1283,6 +1323,7 @@ async fn exec_download_server_files(
                     progress,
                     file_index,
                     file_total,
+                    file_scope,
                 )
                 .map_err(|e| format!("下载文件[{}]失败！{}", remote_path.display(), e))?;
             }
@@ -1328,10 +1369,12 @@ fn remote_path_is_dir(sftp: &ssh2::Sftp, path: &Path) -> bool {
 /// * `progress` - 进度推送器
 /// * `file_index` - 第几个文件（1-based）
 /// * `file_total` - 共几个文件
+/// * `file_scope` - 是否使用文件操作取消标记
 ///
 /// # Returns
 /// * `Ok(())` 成功
 /// * `Err(String)` 失败（含手动停止）
+#[allow(clippy::too_many_arguments)]
 fn download_server_file(
     remote_path: &Path,
     local_path: &Path,
@@ -1339,6 +1382,7 @@ fn download_server_file(
     progress: &mut ProgressState,
     file_index: u32,
     file_total: u32,
+    file_scope: bool,
 ) -> Result<(), String> {
     // 远程文件大小：stat 失败时为 0，退化为不定长进度（只显示已下载字节）
     let total = sftp.stat(remote_path).ok().and_then(|s| s.size).unwrap_or(0);
@@ -1357,8 +1401,18 @@ fn download_server_file(
     let mut buffer = vec![0u8; IO_CHUNK];
     let mut transferred: u64 = 0;
     loop {
-        if is_cancelled() {
-            return Err(CANCELLED_MSG.to_string());
+        // 文件管理弹窗下载认文件操作终止标记，发布流程下载认发布停止标记
+        let cancelled = if file_scope {
+            is_file_cancelled()
+        } else {
+            is_cancelled()
+        };
+        if cancelled {
+            return Err(if file_scope {
+                FILE_OP_CANCELLED_MSG.to_string()
+            } else {
+                CANCELLED_MSG.to_string()
+            });
         }
         let read_len = remote_file
             .read(&mut buffer)
@@ -1390,6 +1444,163 @@ fn download_server_file(
     Ok(())
 }
 
+/// 远程目录一级条目（文件管理弹窗「查看文件」用）
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteDirEntry {
+    /// 条目名称
+    pub name: String,
+    /// 远端完整路径（原样返回远端分隔符）
+    pub path: String,
+    /// 是否目录
+    pub is_dir: bool,
+    /// 字节大小（目录为 0）
+    pub size: u64,
+    /// 修改时间（Unix 秒，0 = 未知）
+    pub modified: u64,
+}
+
+/// 列出远程目录一级文件/文件夹（走 SFTP，一次连接拿到名称/类型/大小/修改时间）
+///
+/// 只列一级，不递归；`.` / `..` 已过滤；结果目录在前、名称升序。
+/// 读取失败（路径不存在 / 无权限）返回带路径的错误文案，供前端直接展示。
+///
+/// # Arguments
+/// * `cancel_scope` - 取消范围：`"file"` 认文件操作终止标记，其余认发布停止标记
+#[tauri::command]
+pub async fn list_remote_dir(
+    username: &str,
+    password: &str,
+    server: &str,
+    remote_path: &str,
+    cancel_scope: Option<String>,
+) -> Result<Vec<RemoteDirEntry>, String> {
+    let file_scope = cancel_scope.as_deref() == Some("file");
+    if file_scope {
+        check_file_cancelled()?;
+    } else {
+        check_cancelled()?;
+    }
+
+    // SFTP 读取是阻塞调用，放进独立线程避免卡住 Tokio 运行时；
+    // 主循环 200ms 轮询终止标记，终止后立即返回（后台线程随 SSH 会话超时自然结束，结果被丢弃）
+    let username = username.to_string();
+    let password = password.to_string();
+    let server = server.to_string();
+    let remote_path = remote_path.to_string();
+    let mut task =
+        tokio::task::spawn_blocking(move || list_remote_dir_blocking(&username, &password, &server, &remote_path));
+    loop {
+        tokio::select! {
+            res = &mut task => {
+                return res.map_err(|e| format!("读取远程目录线程异常: {}", e))?;
+            }
+            _ = tokio::time::sleep(Duration::from_millis(200)) => {
+                let cancelled = if file_scope {
+                    is_file_cancelled()
+                } else {
+                    is_cancelled()
+                };
+                if cancelled {
+                    return Err(if file_scope {
+                        FILE_OP_CANCELLED_MSG.to_string()
+                    } else {
+                        CANCELLED_MSG.to_string()
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// `list_remote_dir` 的阻塞实现（供 spawn_blocking 调用）
+fn list_remote_dir_blocking(
+    username: &str,
+    password: &str,
+    server: &str,
+    remote_path: &str,
+) -> Result<Vec<RemoteDirEntry>, String> {
+    let shared = ssh_pool::get_session(username, password, server)?;
+    let mut entries: Vec<RemoteDirEntry> = {
+        let mut entry = shared.lock().map_err(|_| "SSH 会话锁中毒".to_string())?;
+        let sftp = entry
+            .session
+            .sftp()
+            .map_err(|e| format!("无法创建 SFTP 会话: {}", e))?;
+        let items = sftp.readdir(Path::new(remote_path)).map_err(|e| {
+            format!(
+                "无法读取远程目录[{}]：{}（请确认路径存在且账号有读取权限）",
+                remote_path, e
+            )
+        })?;
+        let mut list: Vec<RemoteDirEntry> = Vec::with_capacity(items.len());
+        for (path, stat) in items {
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            if name.is_empty() || name == "." || name == ".." {
+                continue;
+            }
+            list.push(RemoteDirEntry {
+                name,
+                path: path.to_string_lossy().to_string(),
+                is_dir: stat.is_dir(),
+                size: stat.size.unwrap_or(0),
+                modified: stat.mtime.unwrap_or(0),
+            });
+        }
+        entry.last_used = Instant::now();
+        list
+    };
+    entries.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    Ok(entries)
+}
+
+/// 目标已存在同名文件时的处理方式
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ConflictMode {
+    /// 直接覆盖（默认，与历史行为一致）
+    Overwrite,
+    /// 已存在则跳过
+    Skip,
+    /// 比较修改时间：服务器上更新则跳过，本地更新则覆盖
+    KeepLatest,
+}
+
+impl ConflictMode {
+    /// 前端 `conflictMode` 字符串解析：`"skip"` / `"keepLatest"`，其余（含 None）覆盖
+    fn parse(raw: Option<&str>) -> Self {
+        match raw {
+            Some("skip") => Self::Skip,
+            Some("keepLatest") => Self::KeepLatest,
+            _ => Self::Overwrite,
+        }
+    }
+}
+
+/// 上传结果汇总
+///
+/// 既有调用点只判 `code`、失败读 `msg`（不读 `data`），故由 `bool` 扩为对象安全；
+/// 文件管理弹窗据此区分「已上传」与「已跳过（目标已存在）」。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadOutcome {
+    /// 计划条目数（本地路径数，目录按 1 条计）
+    pub total: u32,
+    /// 实际写入的文件数（目录会展开为多个文件）
+    pub uploaded: u32,
+    /// 因目标已存在而跳过的文件数（conflict_mode = "skip"）
+    pub skipped: u32,
+    /// 被跳过的远端路径（便于前端逐条提示）
+    pub skipped_files: Vec<String>,
+}
+
 /// 上传文件到服务器
 ///
 /// # Arguments
@@ -1398,9 +1609,11 @@ fn download_server_file(
 /// * `username` - 用户名称
 /// * `password` - 用户密码
 /// * `server` - 服务器地址
+/// * `conflict_mode` - 目标已存在时的处理：`"skip"` 跳过、`"keepLatest"` 保留较新的一份，其余（含 None）覆盖
+/// * `cancel_scope` - 取消范围：`"file"` 认文件操作终止标记，其余认发布停止标记
 ///
 /// # Returns
-/// * `Ok(true)` 成功
+/// * `Ok(UploadOutcome)` 成功（含跳过统计）
 /// * `Err(String)` 失败
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
@@ -1413,8 +1626,13 @@ pub async fn upload_server_files(
     server: &str,
     retry_count: Option<u32>,
     retry_interval_secs: Option<u64>,
-) -> Result<bool, String> {
+    conflict_mode: Option<String>,
+    cancel_scope: Option<String>,
+) -> Result<UploadOutcome, String> {
     let mut progress = ProgressState::new(Some(&app));
+    let conflict = ConflictMode::parse(conflict_mode.as_deref());
+    // 文件管理弹窗发起的上传用独立标记，避免与发布「停止」互相打断
+    let file_scope = cancel_scope.as_deref() == Some("file");
     // retry_count = None → 内建默认 3 次/2s（直连调用点行为不变）；前端重试包装传 1 单发，重试由前端控制
     let max_attempts = retry_count.unwrap_or(MAX_RETRIES).max(1);
     let delay = retry_interval_secs
@@ -1424,7 +1642,11 @@ pub async fn upload_server_files(
     let mut attempts = 0;
     let mut err_msg = String::new();
     while attempts < max_attempts {
-        check_cancelled()?;
+        if file_scope {
+            check_file_cancelled()?;
+        } else {
+            check_cancelled()?;
+        }
         match exec_upload_server_files(
             remote_paths.clone(),
             local_paths.clone(),
@@ -1432,11 +1654,17 @@ pub async fn upload_server_files(
             password,
             server,
             &mut progress,
+            conflict,
+            file_scope,
         )
         .await
         {
             Ok(output) => return Ok(output),
             Err(e) => {
+                // 主动终止不再重试，原样返回（前端据文案标记「已终止 / 已停止」）
+                if e == CANCELLED_MSG || e == FILE_OP_CANCELLED_MSG {
+                    return Err(e);
+                }
                 attempts += 1;
                 emit_retry(
                     Some(&app),
@@ -1446,8 +1674,19 @@ pub async fn upload_server_files(
                     attempts < max_attempts,
                     &e,
                 );
-                if attempts < max_attempts && !sleep_with_cancel(delay) {
-                    return Err(CANCELLED_MSG.to_string());
+                if attempts < max_attempts {
+                    let slept = if file_scope {
+                        sleep_with_file_cancel(delay)
+                    } else {
+                        sleep_with_cancel(delay)
+                    };
+                    if !slept {
+                        return Err(if file_scope {
+                            FILE_OP_CANCELLED_MSG.to_string()
+                        } else {
+                            CANCELLED_MSG.to_string()
+                        });
+                    }
                 }
                 err_msg = e.to_string();
             }
@@ -1470,6 +1709,7 @@ pub async fn upload_server_files(
 /// # Returns
 /// * `Ok(true)` 成功
 /// * `Err(String)` 失败
+#[allow(clippy::too_many_arguments)]
 async fn exec_upload_server_files(
     remote_paths: Vec<String>,
     local_paths: Vec<String>,
@@ -1477,7 +1717,9 @@ async fn exec_upload_server_files(
     password: &str,
     server: &str,
     progress: &mut ProgressState,
-) -> Result<bool, String> {
+    conflict: ConflictMode,
+    file_scope: bool,
+) -> Result<UploadOutcome, String> {
     if local_paths.len() != remote_paths.len() {
         return Err("本地路径和远程路径的数量必须相同.".into());
     }
@@ -1486,13 +1728,19 @@ async fn exec_upload_server_files(
     // 从连接池取（或新建）已认证的 SSH 会话
     let shared = ssh_pool::get_session(username, password, server)?;
 
-    let outcome: Result<bool, String> = (|| {
+    let outcome: Result<UploadOutcome, String> = (|| {
         let mut entry = shared.lock().map_err(|_| "SSH 会话锁中毒".to_string())?;
 
         let sftp = entry
             .session
             .sftp()
             .map_err(|e| format!("无法创建 SFTP 会话: {}", e))?;
+        let mut result = UploadOutcome {
+            total: file_total,
+            uploaded: 0,
+            skipped: 0,
+            skipped_files: Vec::new(),
+        };
         for (index, (local_path, remote_path)) in
             local_paths.iter().zip(remote_paths.iter()).enumerate()
         {
@@ -1512,43 +1760,77 @@ async fn exec_upload_server_files(
                         sftp.mkdir(&remote_file_path, 0o755)
                             .map_err(|e| format!("无法创建远程目录: {:?}", e))?;
                     } else {
-                        // 上传文件
-                        upload_server_file(
+                        // 上传文件（按冲突模式决定是否跳过）
+                        let uploaded = upload_server_file(
                             entry_path,
                             &remote_file_path,
                             &sftp,
                             progress,
                             file_index,
                             file_total,
+                            conflict,
+                            file_scope,
                         )
                         .map_err(|e| format!("上传文件[{}]失败！{}", entry_path.display(), e))?;
+                        if uploaded {
+                            result.uploaded += 1;
+                        } else {
+                            result.skipped += 1;
+                            result
+                                .skipped_files
+                                .push(remote_file_path.to_string_lossy().to_string());
+                        }
                     }
                 }
             } else {
                 // 上传单个文件
-                upload_server_file(
+                let uploaded = upload_server_file(
                     local_path,
                     remote_path,
                     &sftp,
                     progress,
                     file_index,
                     file_total,
+                    conflict,
+                    file_scope,
                 )
                 .map_err(|e| format!("上传文件[{}]失败！{}", local_path.display(), e))?;
+                if uploaded {
+                    result.uploaded += 1;
+                } else {
+                    result.skipped += 1;
+                    result
+                        .skipped_files
+                        .push(remote_path.to_string_lossy().to_string());
+                }
             }
         }
 
         entry.last_used = Instant::now();
-        Ok(true)
+        Ok(result)
     })();
 
     match outcome {
-        Ok(_) => Ok(true),
+        Ok(result) => Ok(result),
         Err(e) => {
-            ssh_pool::invalidate(username, server);
+            // 主动终止是用户意图，不销毁会话（下次上传还能复用）
+            if e != CANCELLED_MSG && e != FILE_OP_CANCELLED_MSG {
+                ssh_pool::invalidate(username, server);
+            }
             Err(e)
         }
     }
+}
+
+/// 本地文件修改时间（Unix 秒）；读不到元数据/时间返回 None
+fn local_mtime_secs(path: &Path) -> Option<u64> {
+    fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|elapsed| elapsed.as_secs())
 }
 
 /// 上传服务器文件（分块读写，中途推送进度）
@@ -1560,10 +1842,14 @@ async fn exec_upload_server_files(
 /// * `progress` - 进度推送器
 /// * `file_index` - 第几个文件（1-based）
 /// * `file_total` - 共几个文件
+/// * `conflict` - 目标已存在时的处理：覆盖 / 跳过 / 保留较新的一份
+/// * `file_scope` - 是否使用文件操作取消标记（文件管理弹窗上传时为 true）
 ///
 /// # Returns
-/// * `Ok(())` 成功
-/// * `Err(String)` 失败（含手动停止）
+/// * `Ok(true)` 已上传
+/// * `Ok(false)` 目标已存在且按冲突模式跳过
+/// * `Err(String)` 失败（含手动终止）
+#[allow(clippy::too_many_arguments)]
 fn upload_server_file(
     local_path: &Path,
     remote_path: &Path,
@@ -1571,7 +1857,35 @@ fn upload_server_file(
     progress: &mut ProgressState,
     file_index: u32,
     file_total: u32,
-) -> Result<(), String> {
+    conflict: ConflictMode,
+    file_scope: bool,
+) -> Result<bool, String> {
+    // 跳过 / 保留最新：先探测远端是否存在（含目录递归上传的每个子文件）
+    if conflict != ConflictMode::Overwrite {
+        if let Ok(remote_stat) = sftp.stat(remote_path) {
+            let should_skip = match conflict {
+                // 无条件跳过
+                ConflictMode::Skip => true,
+                // 服务器上的修改时间不旧于本地 → 保留服务器版本；本地时间读不到时按覆盖处理
+                ConflictMode::KeepLatest => local_mtime_secs(local_path)
+                    .map(|local| remote_stat.mtime.unwrap_or(0) >= local)
+                    .unwrap_or(false),
+                ConflictMode::Overwrite => false,
+            };
+            if should_skip {
+                let file_name = local_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                let size = fs::metadata(local_path).map(|m| m.len()).unwrap_or(0);
+                // 推送一次终态进度，避免前端进度条停在中途
+                progress.emit_force("upload", &file_name, size, size, file_index, file_total);
+                return Ok(false);
+            }
+        }
+    }
+
     // 打开本地文件
     let mut local_file = File::open(local_path)
         .map_err(|e| format!("无法打开本地文件[{}]: {}", local_path.display(), e))?;
@@ -1591,7 +1905,9 @@ fn upload_server_file(
     let mut buffer = vec![0u8; IO_CHUNK];
     let mut transferred: u64 = 0;
     loop {
-        if is_cancelled() {
+        if file_scope {
+            check_file_cancelled()?;
+        } else if is_cancelled() {
             return Err(CANCELLED_MSG.to_string());
         }
         let read_len = local_file
@@ -1624,26 +1940,21 @@ fn upload_server_file(
     );
 
     // 保留本地文件修改时间（供【核对程序集】逐文件比对使用），失败静默忽略不影响上传结果
-    if let Ok(metadata) = fs::metadata(local_path) {
-        if let Ok(modified) = metadata.modified() {
-            if let Ok(elapsed) = modified.duration_since(std::time::UNIX_EPOCH) {
-                let secs = elapsed.as_secs();
-                let _ = sftp.setstat(
-                    remote_path,
-                    ssh2::FileStat {
-                        size: None,
-                        uid: None,
-                        gid: None,
-                        perm: None,
-                        atime: Some(secs),
-                        mtime: Some(secs),
-                    },
-                );
-            }
-        }
+    if let Some(secs) = local_mtime_secs(local_path) {
+        let _ = sftp.setstat(
+            remote_path,
+            ssh2::FileStat {
+                size: None,
+                uid: None,
+                gid: None,
+                perm: None,
+                atime: Some(secs),
+                mtime: Some(secs),
+            },
+        );
     }
 
-    Ok(())
+    Ok(true)
 }
 
 /// 执行本地命令

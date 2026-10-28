@@ -26,12 +26,12 @@ export type ServerLogOption = {
 	pathFieldLabel: string;
 };
 
-/** 下拉可选的四类日志（顺序即菜单顺序） */
+/** 四类日志（顺序即日志窗口页签顺序：发布 → 备份 → 恢复 → 上传） */
 export const SERVER_LOG_OPTIONS: ServerLogOption[] = [
+	{ type: "publish", label: "发布日志", fileName: "发布日志.log", pathField: "assemblyStagingPath", pathFieldLabel: "程序集暂存路径" },
 	{ type: "backup", label: "备份日志", fileName: "备份日志.log", pathField: "serviceBackupPath", pathFieldLabel: "服务备份路径" },
 	{ type: "restore", label: "恢复日志", fileName: "恢复日志.log", pathField: "serviceBackupPath", pathFieldLabel: "服务备份路径" },
 	{ type: "upload", label: "上传日志", fileName: "上传日志.log", pathField: "assemblyStagingPath", pathFieldLabel: "程序集暂存路径" },
-	{ type: "publish", label: "发布日志", fileName: "发布日志.log", pathField: "assemblyStagingPath", pathFieldLabel: "程序集暂存路径" },
 ];
 
 /** 日志文件不存在的标记（命令必定 exit 0，避免后端非 0 退出码触发重试） */

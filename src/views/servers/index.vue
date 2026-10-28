@@ -131,20 +131,9 @@
               @click="onTestConnect(scope.row)"
               >{{ !scope.row.loading ? "测试连接" : "连接中" }}</el-button
             >
-            <el-dropdown
-              class="log-dropdown"
-              trigger="click"
-              @command="(type: any) => onViewLog(scope.row, type)"
+            <el-button size="small" text type="primary" @click="onViewLog(scope.row)"
+              >查看日志</el-button
             >
-              <el-button size="small" text type="primary">查看日志</el-button>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item v-for="opt in logOptions" :key="opt.type" :command="opt.type">
-                    {{ opt.label }}
-                  </el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
             <el-dropdown
               class="log-dropdown"
               trigger="click"
@@ -279,9 +268,9 @@ import { displayOs } from "@/utils/other";
 import { save } from "@tauri-apps/plugin-dialog";
 import { formatDate } from "@/utils/formatTime";
 import {
-  SERVER_LOG_OPTIONS,
   buildLogFileName,
   buildRemoteLogExistsCommand,
+  getServerLogOption,
   resolveServerLogTarget,
   type ServerLogType,
 } from "@/utils/serverLog";
@@ -567,16 +556,15 @@ const onInvokeCommand = (row: RowServerType) => {
 
 // ============ 服务器日志（查看 / 下载） ============
 // 四类操作日志由 STEP 发布流程写入服务器，路径取自服务器的服务备份路径 / 程序集暂存路径
-const logOptions = SERVER_LOG_OPTIONS;
+// 查看：统一收进日志窗口（按页签查看，页签内可下载当前页签的完整日志文件）
+// 下载：保留表格行的下载下拉，行为与菜单顺序都不变
+/** 下载下拉菜单顺序（沿用改造前顺序，与日志窗口页签顺序无关） */
+const LOG_DOWNLOAD_ORDER: ServerLogType[] = ["backup", "restore", "upload", "publish"];
+const logOptions = LOG_DOWNLOAD_ORDER.map((type) => getServerLogOption(type));
 
-// 查看日志：弹窗展示对应日志最新 100 行
-const onViewLog = (row: RowServerType, type: ServerLogType) => {
-  const target = resolveServerLogTarget(row, type);
-  if (!target.ok) {
-    ElMessage.warning(target.message);
-    return;
-  }
-  serverLogDialogRef.value?.openDialog(row, type);
+// 查看日志：打开日志窗口（默认「发布」页签，其余页签激活时才加载）
+const onViewLog = (row: RowServerType) => {
+  serverLogDialogRef.value?.openDialog(row);
 };
 
 // 下载日志：选择本地保存路径后通过 SFTP 下载
@@ -886,7 +874,7 @@ onMounted(async () => {
       flex: 1;
     }
   }
-  // 表格操作列内的日志下拉按钮：与相邻文字按钮间距对齐 el-button + el-button 的 12px
+  // 表格操作列内的日志下载下拉：与相邻文字按钮间距对齐 el-button + el-button 的 12px
   .log-dropdown {
     margin-left: 12px;
     vertical-align: middle;

@@ -437,6 +437,7 @@ pub async fn discover_remote_docker_containers(
 /// - Source 与 Destination 完全相同（多为系统资源共享，如 /usr/share/fonts）：-20
 /// - Source 为 docker named volume 目录（/var/lib/docker/volumes/...）：-60
 /// - Destination 路径段越多加微量分（深路径更可能是应用专属目录）
+///
 /// 同分时取靠前的挂载（保持原始顺序稳定）。
 fn pick_publish_mount<'a>(mounts: &'a [Mount], working_dir: &str) -> Option<&'a Mount> {
     mounts.iter().enumerate().max_by_key(|(idx, m)| {

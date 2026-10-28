@@ -113,6 +113,34 @@
                             </div>
                         </el-form-item>
                     </el-col>
+                    <el-col :span="24" class="mb20">
+                        <el-form-item label="文件管理路径">
+                            <div class="default-server-paths">
+                                <div class="default-server-path-item"
+                                    v-for="(uploadPath, uploadIndex) in uploadPaths" :key="uploadIndex">
+                                    <el-icon title="移除" color="#F56C6C" :size="20" class="path-remove"
+                                        @click="removeUploadPath(uploadIndex)">
+                                        <Remove />
+                                    </el-icon>
+                                    <el-input :model-value="uploadPath"
+                                        @update:model-value="(value: string) => updateUploadPath(uploadIndex, value)"
+                                        placeholder="请输入文件管理路径，如 D:\upload 或 /data/upload（选填）" maxlength="200"
+                                        clearable></el-input>
+                                </div>
+                                <div class="default-server-paths-actions">
+                                    <el-icon v-if="uploadPaths.length < UPLOAD_PATH_LIMIT" title="新增" color="#A8ABB2"
+                                        :size="26" @click="addUploadPath">
+                                        <CirclePlus />
+                                    </el-icon>
+                                    <el-button type="primary" plain size="small" :loading="detectingFolders"
+                                        @click="onDetectFolders">
+                                        识别文件夹
+                                    </el-button>
+                                    <span class="upload-path-tip">识别各服务路径下的 logs 目录，及 WebClient 路径下的 wwwroot/Templates</span>
+                                </div>
+                            </div>
+                        </el-form-item>
+                    </el-col>
                 </el-row>
             </el-form>
             <template #footer>
@@ -129,11 +157,13 @@
 <script setup lang="ts" name="serverDialog">
 import { computed, nextTick, reactive, ref } from "vue";
 import type { FormInstance, FormRules } from "element-plus";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import _ from "lodash";
 import { useServerDb } from "@/database/servers/index";
 import { useProjectDb } from "@/database/project/index";
 import { useServiceDiscovery } from "@/composables/useServiceDiscovery";
+import { cmdInvoke } from "@/utils/command";
+import { buildRemoteDirExistsCommand, joinRemotePath } from "@/utils/remoteFs";
 import { getDefaultSubObject } from "@/utils/other";
 import { verifiyNumberInteger } from "@/utils/toolsValidate";
 import { CirclePlus, Remove } from "@element-plus/icons-vue";
@@ -164,6 +194,7 @@ const state = reactive<FormDialogType<RowServerType>>({
         serviceBackupPath: null,
         assemblyStagingPath: null,
         defaultServerPaths: [],
+        uploadPaths: [],
     },
     dialog: {
         show: false,
@@ -184,6 +215,25 @@ const defaultServerPaths = computed<ServerDefaultPathType[]>(() => {
 
 // 服务类型选项（与应用配置各服务页签对应）
 const serviceTypeOptions = ["WebApiHost", "ScheduleServer", "WebClient", "WpfClient", "SpcMonitor"];
+
+// 文件管理路径（保证为数组，供模板渲染与增删操作使用）
+const UPLOAD_PATH_LIMIT = 10;
+const uploadPaths = computed<string[]>(() => {
+    if (!Array.isArray(state.ruleForm.uploadPaths)) {
+        state.ruleForm.uploadPaths = [];
+    }
+    return state.ruleForm.uploadPaths;
+});
+const addUploadPath = () => {
+    if (uploadPaths.value.length >= UPLOAD_PATH_LIMIT) return;
+    uploadPaths.value.push("");
+};
+const removeUploadPath = (index: number) => {
+    uploadPaths.value.splice(index, 1);
+};
+const updateUploadPath = (index: number, value: string) => {
+    uploadPaths.value[index] = value;
+};
 
 // 服务发现（复用服务发现能力，仅追加不覆盖已有组）
 const { loadPrefixes, scanRemote, error: discoveryError } = useServiceDiscovery();
@@ -260,6 +310,137 @@ const onDiscoverServices = async () => {
     }
 };
 
+// 文件管理路径比较键（去空白、去尾部斜杠、忽略大小写，用于去重）
+const uploadPathKey = (path: string) =>
+    String(path ?? "").trim().replace(/[\\/]+$/, "").toLowerCase();
+
+// 识别文件夹：各非 WPF 服务路径下的 logs、WebClient 路径下的 wwwroot/Templates，存在则加入文件管理路径
+const detectingFolders = ref(false);
+
+/** 远端目录存在性探测（必定 exit 0 的命令，输出 1/0） */
+const probeRemoteDir = async (path: string): Promise<"exists" | "missing" | "failed"> => {
+    const result = await cmdInvoke<string>("execute_remote_command", {
+        username: state.ruleForm.account,
+        password: state.ruleForm.pwd,
+        server: `${state.ruleForm.ip}:${state.ruleForm.port}`,
+        command: buildRemoteDirExistsCommand(Number(state.ruleForm.os), path),
+        // 探测类命令无需重试，避免 3 次等待与重试日志
+        retryCount: 1,
+    });
+    if (result.code !== 0) return "failed";
+    return String(result.data ?? "").trim() === "1" ? "exists" : "missing";
+};
+
+const onDetectFolders = async () => {
+    if (detectingFolders.value) return;
+    if (!state.ruleForm.ip || !state.ruleForm.account || !state.ruleForm.pwd) {
+        ElMessage.warning("请先填写 IP、账号、密码，再进行文件夹识别！");
+        return;
+    }
+    // 服务路径组（过滤掉未填发布路径的）
+    const groups = (state.ruleForm.defaultServerPaths || []).filter((group) => (group.path ?? "").trim() !== "");
+    if (groups.length === 0) {
+        ElMessage.warning("未配置服务路径，请先点击「识别服务」或手动填写发布路径！");
+        return;
+    }
+
+    // 模板目录候选：仅 WebClient（先按服务类型精确匹配，匹配不到再按服务标识/路径文本回退，与识别服务的类型推断口径一致）
+    let templateBases = groups
+        .filter((group) => group.serviceType === "WebClient")
+        .map((group) => String(group.path).trim());
+    if (templateBases.length === 0) {
+        templateBases = groups
+            .filter((group) => `${group.identity ?? ""} ${group.path ?? ""}`.toLowerCase().includes("webclient"))
+            .map((group) => String(group.path).trim());
+    }
+
+    // 日志目录候选：除 WPF 以外的所有服务路径（WPF 为客户端，服务器上无日志目录；未选服务类型时按文本含 wpf 兜底排除）
+    const isWpfGroup = (group: ServerDefaultPathType) => {
+        if (group.serviceType === "WpfClient") return true;
+        if ((group.serviceType ?? "") !== "") return false;
+        return `${group.identity ?? ""} ${group.path ?? ""}`.toLowerCase().includes("wpf");
+    };
+    const logBases = groups
+        .filter((group) => !isWpfGroup(group))
+        .map((group) => String(group.path).trim());
+
+    // 基路径去重（同一路径可能被多个服务类型复用），避免重复探测
+    const uniqueByPathKey = (paths: string[]) => {
+        const keys = new Set<string>();
+        return paths.filter((path) => {
+            const key = uploadPathKey(path);
+            if (!key || keys.has(key)) return false;
+            keys.add(key);
+            return true;
+        });
+    };
+    const templateBaseList = uniqueByPathKey(templateBases);
+    const logBaseList = uniqueByPathKey(logBases);
+
+    if (templateBaseList.length === 0 && logBaseList.length === 0) {
+        ElMessage.warning("未找到可识别的服务路径（logs 目录需非 WPF 服务，模板目录需 WebClient 服务）！");
+        return;
+    }
+
+    detectingFolders.value = true;
+    const found: string[] = [];
+    const missing: string[] = [];
+    const failed: string[] = [];
+    try {
+        // 1. 模板目录：WebClient 基路径下的 wwwroot/Templates
+        for (const base of templateBaseList) {
+            const templatePath = joinRemotePath(base, "wwwroot", "Templates");
+            const templateState = await probeRemoteDir(templatePath);
+            if (templateState === "exists") found.push(templatePath);
+            else if (templateState === "missing") missing.push(templatePath);
+            else failed.push(templatePath);
+        }
+
+        // 2. 日志目录：各非 WPF 服务路径下的 <base>/logs（只认根目录）
+        for (const base of logBaseList) {
+            const logPath = joinRemotePath(base, "logs");
+            const logState = await probeRemoteDir(logPath);
+            if (logState === "exists") found.push(logPath);
+            else if (logState === "missing") missing.push(logPath);
+            else failed.push(logPath);
+        }
+
+        // 清掉空输入行后追加（去重、上限 10）
+        state.ruleForm.uploadPaths = uploadPaths.value.filter((path) => path.trim() !== "");
+        const existingKeys = new Set(state.ruleForm.uploadPaths.map(uploadPathKey).filter(Boolean));
+        let added = 0;
+        for (const detectedPath of found) {
+            if (state.ruleForm.uploadPaths.length >= UPLOAD_PATH_LIMIT) break;
+            const key = uploadPathKey(detectedPath);
+            if (!key || existingKeys.has(key)) continue;
+            existingKeys.add(key);
+            state.ruleForm.uploadPaths.push(detectedPath);
+            added++;
+        }
+
+        const summary = `识别 ${found.length + missing.length + failed.length} 个目录：新增 ${added} 个` +
+            (missing.length > 0 ? `，不存在 ${missing.length} 个` : "") +
+            (failed.length > 0 ? `，探测失败 ${failed.length} 个` : "");
+        if (added > 0) ElMessage.success(`${summary}，请确认后保存`);
+        else ElMessage.warning(summary);
+
+        if (missing.length > 0 || failed.length > 0) {
+            const lines = [
+                ...missing.map((path) => `不存在：${path}`),
+                ...failed.map((path) => `探测失败：${path}`),
+            ];
+            ElMessageBox.alert(lines.join("<br/>"), "文件夹识别明细", {
+                confirmButtonText: "知道了",
+                dangerouslyUseHTMLString: true,
+            });
+        }
+    } catch (e: any) {
+        ElMessage.error("识别文件夹出错：" + (e?.message ?? String(e)));
+    } finally {
+        detectingFolders.value = false;
+    }
+};
+
 // 表单验证规则
 const formRules = reactive<FormRules>({
     projectId: [{ required: true, message: "请选择所属项目（可选「全部」）！", trigger: "change" }],
@@ -292,6 +473,7 @@ const openDialog = async (type: string, row: RowServerType) => {
     if (state.ruleForm.os == 0) state.ruleForm.os = 1;
     if (state.ruleForm.port == 0) state.ruleForm.port = 22;
     if (!Array.isArray(state.ruleForm.defaultServerPaths)) state.ruleForm.defaultServerPaths = [];
+    if (!Array.isArray(state.ruleForm.uploadPaths)) state.ruleForm.uploadPaths = [];
     state.dialog.editId = null;
     state.dialog.type = "add";
     /* End: 重置表单内容 */
@@ -304,6 +486,8 @@ const openDialog = async (type: string, row: RowServerType) => {
             // 存量数据 project_id 为 null 的服务器按「全部」回显
             if (state.ruleForm.projectId == null) state.ruleForm.projectId = 0;
             if (!Array.isArray(state.ruleForm.defaultServerPaths)) state.ruleForm.defaultServerPaths = [];
+            // 数组深拷贝一份，避免弹窗内增删直接改到列表行数据
+            state.ruleForm.uploadPaths = Array.isArray(row.uploadPaths) ? [...row.uploadPaths] : [];
             state.dialog.title = "修改服务器";
             state.dialog.submitTxt = "修改";
         } else {
@@ -330,6 +514,14 @@ const onSubmit = async () => {
     state.ruleForm.defaultServerPaths = (state.ruleForm.defaultServerPaths || []).filter(
         (item) => (item.identity ?? "") !== "" || (item.path ?? "") !== ""
     );
+    // 文件管理路径：去空、去重（忽略大小写），保持录入顺序
+    const uploadPathKeys = new Set<string>();
+    state.ruleForm.uploadPaths = (state.ruleForm.uploadPaths || []).filter((path) => {
+        const key = uploadPathKey(path);
+        if (!key || uploadPathKeys.has(key)) return false;
+        uploadPathKeys.add(key);
+        return true;
+    }).map((path) => path.trim());
     // projectId 0 = 全部，落库为 null（查询时按 project_id is null 带出）
     if (state.ruleForm.projectId === 0) state.ruleForm.projectId = null;
     if (state.dialog.type == "edit") {
@@ -400,6 +592,11 @@ defineExpose({
     display: flex;
     align-items: center;
     gap: 10px;
+}
+
+.upload-path-tip {
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
 }
 
 .default-server-path-item {

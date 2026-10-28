@@ -35,6 +35,7 @@ declare type RowServerType = {
 	serviceBackupPath?: string | null;   // 服务备份路径：存放备份文件的目录
 	assemblyStagingPath?: string | null; // 程序集暂存路径：存放将要发布的程序集的目录
 	defaultServerPaths?: ServerDefaultPathType[] | null; // 默认服务标识/发布路径组（多组，应用配置按服务类型快速带出）
+	uploadPaths?: string[] | null; // 文件管理路径（多组，文件管理弹窗作为候选路径）
 	sourceKey?: string | null;   // SSH MCP 同步来源键（项目/环境/主机），有值=已纳管
 	loading?: boolean | null;
 };

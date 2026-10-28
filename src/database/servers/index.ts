@@ -22,6 +22,34 @@ function parseServerPaths(raw: unknown): ServerDefaultPathType[] {
     }
 }
 
+/**
+ * 解析服务器文件管理路径 JSON（脏数据回退空数组）
+ * 逐项过滤非字符串、去首尾空白、去空值，并按忽略大小写去重（保留首次出现）
+ * @param raw JSON 字符串
+ * @returns string[]
+ */
+function parseUploadPaths(raw: unknown): string[] {
+    if (!raw || typeof raw !== "string") return [];
+    try {
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return [];
+        const seen = new Set<string>();
+        const result: string[] = [];
+        for (const item of parsed) {
+            if (typeof item !== "string") continue;
+            const path = item.trim();
+            if (!path) continue;
+            const key = path.toLowerCase();
+            if (seen.has(key)) continue;
+            seen.add(key);
+            result.push(path);
+        }
+        return result;
+    } catch {
+        return [];
+    }
+}
+
 export function useServerDb() {
     return {
         /**
@@ -30,7 +58,7 @@ export function useServerDb() {
          * @returns { any }
          */
         getServerList: async (params: GetServerTableParams) => {
-            let dataSql = "select ts.id, ts.project_id projectId, tp.name projectName, ts.name, ts.os, ts.ip, ts.port, ts.account, ts.pwd, ts.description, ts.service_backup_path serviceBackupPath, ts.assembly_staging_path assemblyStagingPath, ts.default_server_paths defaultServerPaths from t_server ts left join t_project tp on ts.project_id = tp.id";
+            let dataSql = "select ts.id, ts.project_id projectId, tp.name projectName, ts.name, ts.os, ts.ip, ts.port, ts.account, ts.pwd, ts.description, ts.service_backup_path serviceBackupPath, ts.assembly_staging_path assemblyStagingPath, ts.default_server_paths defaultServerPaths, ts.upload_paths uploadPaths from t_server ts left join t_project tp on ts.project_id = tp.id";
             let totalSql = "select count(*) totalCount from t_server ts";
             let where = " where 1=1 ";
             let orderBy = "";
@@ -61,9 +89,10 @@ export function useServerDb() {
                 dataResult.data.total = totalData[0].totalCount;
                 // 查询数据
                 dataResult.data.data = await (await db()).select<RowServerType[]>(dataSql, bindValues);
-                // 解析默认服务标识/发布路径组 JSON
+                // 解析默认服务标识/发布路径组 JSON + 文件管理路径
                 dataResult.data.data.forEach((server) => {
                     server.defaultServerPaths = parseServerPaths((server as any).defaultServerPaths);
+                    server.uploadPaths = parseUploadPaths((server as any).uploadPaths);
                 });
                 dataResult.msg = "查询服务器(分页)列表信息成功";
             } catch (error) {
@@ -80,7 +109,7 @@ export function useServerDb() {
          * @returns { any }
          */
         getServerById: async (id: number) => {
-            let dataSql = "select ts.id, ts.project_id projectId, tp.name projectName, ts.name, ts.os, ts.ip, ts.port, ts.account, ts.pwd, ts.description, ts.service_backup_path serviceBackupPath, ts.assembly_staging_path assemblyStagingPath, ts.default_server_paths defaultServerPaths from t_server ts left join t_project tp on ts.project_id = tp.id where ts.id = $1";
+            let dataSql = "select ts.id, ts.project_id projectId, tp.name projectName, ts.name, ts.os, ts.ip, ts.port, ts.account, ts.pwd, ts.description, ts.service_backup_path serviceBackupPath, ts.assembly_staging_path assemblyStagingPath, ts.default_server_paths defaultServerPaths, ts.upload_paths uploadPaths from t_server ts left join t_project tp on ts.project_id = tp.id where ts.id = $1";
 
             // 定义(默认)响应结果
             let dataResult: DataResultType<TableResultType<RowServerType>> = {
@@ -95,8 +124,9 @@ export function useServerDb() {
                 // 查询数据
                 let serverData = await (await db()).select<RowServerType[]>(dataSql, [id]);
                 if (serverData && serverData.length > 0) {
-                    // 解析默认服务标识/发布路径组 JSON
+                    // 解析默认服务标识/发布路径组 JSON + 文件管理路径
                     serverData[0].defaultServerPaths = parseServerPaths((serverData[0] as any).defaultServerPaths);
+                    serverData[0].uploadPaths = parseUploadPaths((serverData[0] as any).uploadPaths);
                     dataResult.data.data = serverData[0];
                 }
                 dataResult.msg = "查询服务器信息成功";
@@ -113,7 +143,7 @@ export function useServerDb() {
          * @param server 服务器
          */
         insertServer: async (server: RowServerType) => {
-            let insertSql = "INSERT INTO t_server (project_id, name, os, ip, port, account, pwd, description, service_backup_path, assembly_staging_path, default_server_paths) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id;";
+            let insertSql = "INSERT INTO t_server (project_id, name, os, ip, port, account, pwd, description, service_backup_path, assembly_staging_path, default_server_paths, upload_paths) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id;";
 
             // 定义(默认)响应结果
             let dataResult: DataResultType<number> = {
@@ -135,7 +165,7 @@ export function useServerDb() {
                     return dataResult;
                 }
 
-                let rowResult = await (await db()).execute(insertSql, [server.projectId, server.name, server.os, server.ip, server.port, server.account, server.pwd, server.description, server.serviceBackupPath ?? null, server.assemblyStagingPath ?? null, JSON.stringify(server.defaultServerPaths ?? [])]);
+                let rowResult = await (await db()).execute(insertSql, [server.projectId, server.name, server.os, server.ip, server.port, server.account, server.pwd, server.description, server.serviceBackupPath ?? null, server.assemblyStagingPath ?? null, JSON.stringify(server.defaultServerPaths ?? []), JSON.stringify(server.uploadPaths ?? [])]);
                 if (rowResult.lastInsertId && rowResult.lastInsertId > 0) {
                     dataResult.code = 0;
                     dataResult.data = rowResult.lastInsertId;
@@ -157,7 +187,7 @@ export function useServerDb() {
          * @param server 服务器
          */
         updateServer: async (server: RowServerType) => {
-            let updateSql = "UPDATE t_server SET project_id=$1, name=$2, os=$3, ip=$4, port=$5, account=$6, pwd=$7, description=$8, service_backup_path=$9, assembly_staging_path=$10, default_server_paths=$11 WHERE id=$12;";
+            let updateSql = "UPDATE t_server SET project_id=$1, name=$2, os=$3, ip=$4, port=$5, account=$6, pwd=$7, description=$8, service_backup_path=$9, assembly_staging_path=$10, default_server_paths=$11, upload_paths=$12 WHERE id=$13;";
 
             // 定义(默认)响应结果
             let dataResult: DataResultType<boolean> = {
@@ -179,7 +209,7 @@ export function useServerDb() {
                     return dataResult;
                 }
 
-                let rowResult = await (await db()).execute(updateSql, [server.projectId, server.name, server.os, server.ip, server.port, server.account, server.pwd, server.description, server.serviceBackupPath ?? null, server.assemblyStagingPath ?? null, JSON.stringify(server.defaultServerPaths ?? []), server.id]);
+                let rowResult = await (await db()).execute(updateSql, [server.projectId, server.name, server.os, server.ip, server.port, server.account, server.pwd, server.description, server.serviceBackupPath ?? null, server.assemblyStagingPath ?? null, JSON.stringify(server.defaultServerPaths ?? []), JSON.stringify(server.uploadPaths ?? []), server.id]);
                 if (rowResult.rowsAffected > 0) {
                     dataResult.code = 0;
                     dataResult.data = true;

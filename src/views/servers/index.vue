@@ -91,8 +91,8 @@
           </template>
         </el-table-column>
         <el-table-column prop="ip" label="IP地址" width="150" />
-        <el-table-column prop="port" label="SSH端口" width="120" />
         <el-table-column prop="account" label="登录账户" width="120" />
+        <el-table-column prop="port" label="SSH端口" width="120" />
         <!-- <el-table-column prop="pwd" label="登录密码" width="120" /> -->
         <el-table-column prop="projectName" label="所属项目名称" width="200">
           <template #default="scope">
@@ -105,7 +105,7 @@
           min-width="260"
           show-overflow-tooltip
         />
-        <el-table-column label="操作" width="220" fixed="right">
+        <el-table-column label="操作" width="230" fixed="right">
           <template #default="scope">
             <el-button size="small" text type="success" @click="onCopyServer(scope.row)"
               >复制新增</el-button
@@ -129,10 +129,13 @@
               type="primary"
               :loading="scope.row.loading === true"
               @click="onTestConnect(scope.row)"
-              >{{ !scope.row.loading ? "测试连接" : "连接中" }}</el-button
+              >{{ !scope.row.loading ? "测试" : "连接中" }}</el-button
+            >
+            <el-button size="small" text type="primary" @click="onOpenFileManage(scope.row)"
+              >文件管理</el-button
             >
             <el-button size="small" text type="primary" @click="onViewLog(scope.row)"
-              >查看日志</el-button
+              >日志</el-button
             >
             <el-dropdown
               class="log-dropdown"
@@ -165,6 +168,7 @@
     </el-card>
     <server-dialog ref="serverDialogRef" @refresh="getTableData()" />
     <server-log-dialog ref="serverLogDialogRef" />
+    <server-file-dialog ref="serverFileDialogRef" />
 
     <!-- 服务发现结果抽屉 -->
     <el-drawer
@@ -291,6 +295,10 @@ const ServerDialog = defineAsyncComponent(
 const serverLogDialogRef = ref();
 const ServerLogDialog = defineAsyncComponent(
   () => import("@/views/servers/components/serverLogDialog.vue")
+);
+const serverFileDialogRef = ref();
+const ServerFileDialog = defineAsyncComponent(
+  () => import("@/views/servers/components/serverFileDialog.vue")
 );
 
 // 项目信息
@@ -565,6 +573,11 @@ const logOptions = LOG_DOWNLOAD_ORDER.map((type) => getServerLogOption(type));
 // 查看日志：打开日志窗口（默认「发布」页签，其余页签激活时才加载）
 const onViewLog = (row: RowServerType) => {
   serverLogDialogRef.value?.openDialog(row);
+};
+
+// 文件管理：打开上传/浏览弹窗（候选路径取自服务器的「文件管理路径」配置）
+const onOpenFileManage = (row: RowServerType) => {
+  serverFileDialogRef.value?.openDialog(row);
 };
 
 // 下载日志：选择本地保存路径后通过 SFTP 下载

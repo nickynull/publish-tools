@@ -1,4 +1,10 @@
 import { removeSlash } from "@/utils/other";
+import {
+	buildPowerShellEncodedCommand,
+	escapePosix,
+	escapePowerShellLiteral,
+	isWindowsServer,
+} from "@/utils/remoteFs";
 
 /**
  * 服务器日志（服务器上的操作日志文件）读取与下载支持
@@ -43,32 +49,6 @@ export const SERVER_LOG_ERROR = "__SMOM_LOG_ERROR__";
 export const getServerLogOption = (type: ServerLogType): ServerLogOption =>
 	SERVER_LOG_OPTIONS.find((opt) => opt.type === type) ?? SERVER_LOG_OPTIONS[0];
 
-/** Windows 服务器（os=1）；其余按 Linux/Docker 处理（os=2） */
-const isWindowsServer = (os: number) => Number(os) === 1;
-
-/** POSIX 单引号字符串转义 */
-const escapePosix = (path: string) => path.replace(/'/g, `'\\''`);
-/** PowerShell 单引号字面量转义 */
-const escapePowerShell = (path: string) => path.replace(/'/g, "''");
-
-/**
- * 把 PowerShell 脚本编码为 -EncodedCommand 需要的 UTF-16LE base64
- * Windows 经 sshd 默认 shell（GBK 代码页）传中文会乱码，日志文件名含中文，
- * 因此不能直接把脚本拼进 -Command（与 useStepPublish.appendRemoteLogLine 同一做法）
- */
-const toPowerShellEncodedScript = (script: string): string => {
-	const bytes = new Uint8Array(
-		new Uint16Array(Array.from(script).map((c) => c.charCodeAt(0))).buffer
-	);
-	let binary = "";
-	for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-	return btoa(binary);
-};
-
-/** 组装 Windows 下的 powershell 调用（-EncodedCommand 形式） */
-const buildPowerShellCommand = (script: string) =>
-	`powershell -NoProfile -EncodedCommand ${toPowerShellEncodedScript(script)}`;
-
 export type ServerLogTarget =
 	| { ok: true; option: ServerLogOption; basePath: string; remotePath: string }
 	| { ok: false; message: string };
@@ -99,11 +79,11 @@ export function buildRemoteLogTailCommand(os: number, remotePath: string, lines 
 	const path = removeSlash(remotePath);
 	if (isWindowsServer(os)) {
 		const script =
-			`[Console]::OutputEncoding=[Text.Encoding]::UTF8; $p='${escapePowerShell(path)}'; ` +
+			`[Console]::OutputEncoding=[Text.Encoding]::UTF8; $p='${escapePowerShellLiteral(path)}'; ` +
 			`if (-not (Test-Path -LiteralPath $p)) { '${SERVER_LOG_MISSING}' } ` +
 			`else { try { Get-Content -LiteralPath $p -Tail ${lines} -Encoding UTF8 } ` +
 			`catch { '${SERVER_LOG_ERROR} ' + $_.Exception.Message } }`;
-		return buildPowerShellCommand(script);
+		return buildPowerShellEncodedCommand(script);
 	}
 	return `if [ -f '${escapePosix(path)}' ]; then tail -n ${lines} '${escapePosix(path)}'; else echo '${SERVER_LOG_MISSING}'; fi`;
 }
@@ -112,8 +92,8 @@ export function buildRemoteLogTailCommand(os: number, remotePath: string, lines 
 export function buildRemoteLogExistsCommand(os: number, remotePath: string): string {
 	const path = removeSlash(remotePath);
 	if (isWindowsServer(os)) {
-		return buildPowerShellCommand(
-			`if (Test-Path -LiteralPath '${escapePowerShell(path)}') { '1' } else { '0' }`
+		return buildPowerShellEncodedCommand(
+			`if (Test-Path -LiteralPath '${escapePowerShellLiteral(path)}') { '1' } else { '0' }`
 		);
 	}
 	return `if [ -f '${escapePosix(path)}' ]; then echo '1'; else echo '0'; fi`;

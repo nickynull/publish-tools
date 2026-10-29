@@ -1,18 +1,28 @@
 import { ref, nextTick } from "vue";
 import { formatDate } from "@/utils/formatTime";
 
-// 日志行数上限配置：存 localStorage（本机记忆，无需入库）
+// 日志行数上限默认配置：存 localStorage（本机记忆，无需入库）
 const STEP_LOG_MAX_LINES_KEY = "stepLogMaxLines";
 const STEP_LOG_MAX_LINES_DEFAULT = 1000;
 const STEP_LOG_MAX_LINES_MIN = 10;
 const STEP_LOG_MAX_LINES_MAX = 100000;
+
+/** 可选配置：不同使用方可用独立的 localStorage 键与默认上限（不传时保持现状） */
+export type StepLogOptions = {
+	/** 行数上限的 localStorage 键（默认 stepLogMaxLines） */
+	maxLinesStorageKey?: string;
+	/** 默认行数上限（默认 1000） */
+	defaultMaxLines?: number;
+};
 
 /**
  * 项目发布(STEP) 日志组合式函数
  * 所有日志输出到唯一日志区（单页签），带行数上限（超出后清理最旧的行）；
  * 进度行通过自增 id 寻址（行数裁剪会使数组下标前移，不能再用下标定位）。
  */
-export function useStepLog() {
+export function useStepLog(options?: StepLogOptions) {
+	const maxLinesKey = options?.maxLinesStorageKey ?? STEP_LOG_MAX_LINES_KEY;
+	const defaultMaxLines = options?.defaultMaxLines ?? STEP_LOG_MAX_LINES_DEFAULT;
 	const logPrintInfo = ref<LogPrintType[]>([]);
 	// 日志内容容器（唯一），用于自动滚动到底部
 	let logContentEl: HTMLElement | null = null;
@@ -24,16 +34,16 @@ export function useStepLog() {
 
 	function loadMaxLines(): number {
 		try {
-			const raw = localStorage.getItem(STEP_LOG_MAX_LINES_KEY);
-			if (!raw) return STEP_LOG_MAX_LINES_DEFAULT;
+			const raw = localStorage.getItem(maxLinesKey);
+			if (!raw) return defaultMaxLines;
 			return clampMaxLines(Number(raw));
 		} catch {
-			return STEP_LOG_MAX_LINES_DEFAULT;
+			return defaultMaxLines;
 		}
 	}
 
 	function clampMaxLines(n: number): number {
-		if (!Number.isFinite(n)) return STEP_LOG_MAX_LINES_DEFAULT;
+		if (!Number.isFinite(n)) return defaultMaxLines;
 		return Math.min(STEP_LOG_MAX_LINES_MAX, Math.max(STEP_LOG_MAX_LINES_MIN, Math.round(n)));
 	}
 
@@ -50,7 +60,7 @@ export function useStepLog() {
 		const value = clampMaxLines(Number(n));
 		maxLogLines.value = value;
 		try {
-			localStorage.setItem(STEP_LOG_MAX_LINES_KEY, String(value));
+			localStorage.setItem(maxLinesKey, String(value));
 		} catch {
 			// localStorage 不可用时仅本次会话生效
 		}

@@ -559,36 +559,20 @@
                 </el-col>
               </el-row>
             </div>
-            <div class="card-item-content log-content" style="padding: 0px">
-              <el-tabs v-model="activeLogTab" type="border-card" class="log-tabs"
-                :class="{ 'log-tabs-single': displayTabs.length <= 1 }">
-                <el-tab-pane v-for="tab in displayTabs" :key="tab.id" :name="tab.id">
-                  <template #label>
-                    <span>
-                      <span v-if="tab.status === 'running'" style="color: var(--el-color-warning)">●</span>
-                      <span v-else-if="tab.status === 'success'" style="color: var(--el-color-success)">●</span>
-                      <span v-else-if="tab.status === 'error'" style="color: var(--el-color-danger)">●</span>
-                      <span v-else style="color: var(--el-color-info)">●</span>
-                      {{ tab.label }}
-                    </span>
-                  </template>
-                  <div :ref="(el: any) => setTabContentRef(tab.id, el)" class="log-tab-pane-content">
-                    <p v-for="log in tab.logs" :class="log.type">
-                      {{ log.content.value }}
-                      <el-text :type="log.content.uploadFile.currNumber >=
-                        log.content.uploadFile.totalNumber
-                        ? 'primary'
-                        : 'warning'
-                        " size="small" v-if="log.content.uploadFile && log.content.uploadFile.totalNumber > 0">{{
-                          log.content.uploadFile.prefix
-                        }}{{ log.content.uploadFile.currNumber }}/{{
-                          log.content.uploadFile.totalNumber
-                        }}
-                        个文件。</el-text>
-                    </p>
-                  </div>
-                </el-tab-pane>
-              </el-tabs>
+            <div ref="logContentRef" class="card-item-content log-content">
+              <p v-for="log in logPrintInfo" :class="log.type">
+                {{ log.content.value }}
+                <el-text :type="log.content.uploadFile.currNumber >=
+                  log.content.uploadFile.totalNumber
+                  ? 'primary'
+                  : 'warning'
+                  " size="small" v-if="log.content.uploadFile && log.content.uploadFile.totalNumber > 0">{{
+                    log.content.uploadFile.prefix
+                  }}{{ log.content.uploadFile.currNumber }}/{{
+                    log.content.uploadFile.totalNumber
+                  }}
+                  个文件。</el-text>
+              </p>
             </div>
           </div>
         </div>
@@ -698,63 +682,7 @@ const wpfClientName = ref("WpfClient");
 const spcMonitorName = ref("SpcMonitor");
 const projectAssemblyOutPath = ref("");
 const logPrintInfo = ref<LogPrintType[]>([]);
-// 日志标签页：main 为基础日志，服务发布时按实例动态创建
-const logTabs = ref<LogTabType[]>([]);
-const activeLogTab = ref<string>("main");
-const tabContentRefs = ref<Record<string, HTMLElement>>({});
-// 串行发布期间的服务日志标签页上下文，内部日志无需逐个传 tabId
-let currentLogTabId: string | undefined = undefined;
-
-// 展示的标签页：基础页 + 动态服务页
-const displayTabs = computed<LogTabType[]>(() => {
-  const baseTab: LogTabType = {
-    id: "main",
-    label: "总体日志",
-    logs: logPrintInfo.value,
-    status: "info",
-  };
-  return [baseTab, ...logTabs.value];
-});
-
-// 创建日志标签页
-const createLogTab = (serviceName: string, serverName: string, instanceName?: string): string => {
-  const id = `${serviceName}_${serverName}_${instanceName || "default"}_${Date.now()}_${logTabs.value.length}`;
-  const label = instanceName
-    ? `${serviceName} / ${serverName} / ${instanceName}`
-    : `${serviceName} / ${serverName}`;
-  logTabs.value.push({ id, label, logs: [], status: "pending" });
-  return id;
-};
-
-// 更新标签页状态
-const updateTabStatus = (tabId: string, status: LogTabType["status"]) => {
-  const tab = logTabs.value.find((t) => t.id === tabId);
-  if (tab) tab.status = status;
-};
-
-// 绑定标签页内容区 DOM 引用
-const setTabContentRef = (id: string, el: any) => {
-  if (el) tabContentRefs.value[id] = el;
-};
-
-// 在指定日志标签页上下文中执行
-const withLogTab = async <T>(tabId: string, action: () => Promise<T>): Promise<T> => {
-  const prev = currentLogTabId;
-  currentLogTabId = tabId;
-  try {
-    return await action();
-  } finally {
-    currentLogTabId = prev;
-  }
-};
-
-// 滚动到日志底部
-const scrollLogToBottom = (tabId: string) => {
-  nextTick(() => {
-    const el = tabContentRefs.value[tabId];
-    if (el) el.scrollTop = el.scrollHeight;
-  });
-};
+const logContentRef = ref<HTMLElement>();
 const generatePublishLog = ref({
   isEnable: true,
   type: "默认",
@@ -855,7 +783,6 @@ const executeFunModule = async (title: string): Promise<boolean> => {
     case "一键发布":
       try {
         const oneClickPublishResult = await oneClickPublishing();
-        currentLogTabId = undefined;
         if (oneClickPublishResult) {
           printInfoLog("一键发布成功。");
           await getProjectDefault();
@@ -865,7 +792,6 @@ const executeFunModule = async (title: string): Promise<boolean> => {
         if (e?.message === "PUBLISH_STOPPED") {
           printInfoLog("发布已停止.", "log-warning");
         }
-        currentLogTabId = undefined;
         return false;
       }
     case "编译项目": {
@@ -882,7 +808,6 @@ const executeFunModule = async (title: string): Promise<boolean> => {
     case "手动发布":
       try {
         const publishResult = await projectPublish();
-        currentLogTabId = undefined;
         if (publishResult) {
           printInfoLog("手动发布成功。");
           await getProjectDefault();
@@ -892,7 +817,6 @@ const executeFunModule = async (title: string): Promise<boolean> => {
         if (e?.message === "PUBLISH_STOPPED") {
           printInfoLog("发布已停止.", "log-warning");
         }
-        currentLogTabId = undefined;
         return false;
       }
     default:
@@ -1214,7 +1138,6 @@ const oneClickPublishing = async () => {
 
   // 发布项目
   const publishResult = await projectPublish();
-  currentLogTabId = undefined;
   if (!publishResult) return false;
 
   printInfoLog("");
@@ -1317,7 +1240,6 @@ const onGeneratePublish = async () => {
 
 // 发布前备份
 const publishBeforeBackup = async (id: number) => {
-  currentLogTabId = undefined;
   // 传入当前会话的内存态配置：备份需与页面上的「移除」保持一致，不能按 id 重查库
   var backupItem = await loadBackupItems(
     id,
@@ -1463,7 +1385,6 @@ const publishBeforeBackup = async (id: number) => {
 
 // 发布[WebApiHost]服务
 const publishWebApiHost = async () => {
-  currentLogTabId = undefined;
   const webApiHostItem = state.publishData.appconfigData.configItems.webApiHost;
   if (!webApiHostItem.clientPath) return true;
 
@@ -1497,7 +1418,6 @@ const publishWebApiHost = async () => {
 
 // 发布[SpcMonitor]服务
 const publishSpcMonitor = async () => {
-  currentLogTabId = undefined;
   const spcMonitorItem = state.publishData.appconfigData.configItems.spcMonitor;
   if (!spcMonitorItem.clientPath) return true;
 
@@ -1533,7 +1453,6 @@ const publishSpcMonitor = async () => {
 
 // 发布[WebClient]服务
 const publishWebClient = async () => {
-  currentLogTabId = undefined;
   const webClientItem = state.publishData.appconfigData.configItems.webClient;
   if (!webClientItem.clientPath) return true;
 
@@ -1567,7 +1486,6 @@ const publishWebClient = async () => {
 
 // 发布[ScheduleServer]服务
 const publishScheduleServer = async () => {
-  currentLogTabId = undefined;
   const scheduleServerItem = state.publishData.appconfigData.configItems.scheduleServer;
   if (!scheduleServerItem.clientPath) return true;
 
@@ -1608,15 +1526,6 @@ const publishScheduleServer = async () => {
           printInfoLog(`服务[${scheduleServer.name}]未填写服务发布路径，请检查.`, "log-error");
           return false;
         }
-
-        // 每个服务实例一个日志标签页
-        const tabId = createLogTab(
-          scheduleServerName.value,
-          scheduleServer.name || "",
-          serverPathVal.identity
-        );
-        updateTabStatus(tabId, "running");
-        currentLogTabId = tabId;
 
         const uName = serverInfo.account;
         const uPwd = serverInfo.pwd;
@@ -1727,7 +1636,6 @@ const publishScheduleServer = async () => {
           return false;
         }
         printInfoLog(`${logPrefix} 发布成功.`, "log-success");
-        updateTabStatus(tabId, "success");
       }
     }
   }
@@ -1736,7 +1644,6 @@ const publishScheduleServer = async () => {
 
 // [新]发布[WpfClient]服务
 const newPublishWpfClient = async () => {
-  currentLogTabId = undefined;
   const wpfClientItem = state.publishData.appconfigData.configItems.wpfClient;
   if (!wpfClientItem.clientPath) return true;
 
@@ -1781,10 +1688,6 @@ const newPublishWpfClient = async () => {
   // 遍历多台服务器逐个发布
   for (let srvIdx = 0; srvIdx < wpfServerArr.length; srvIdx++) {
     const wpfServer = wpfServerArr[srvIdx];
-    // 每台服务器一个日志标签页
-    const tabId = createLogTab(wpfClientName.value, wpfServer.name || "");
-    updateTabStatus(tabId, "running");
-    currentLogTabId = tabId;
     if (!wpfServer.id) {
       printInfoLog(
         ` ${wpfClientName.value} 未选择服务或该服务器不存在，请检查.`,
@@ -1983,8 +1886,6 @@ const newPublishWpfClient = async () => {
       printInfoLog(`已成功更新 ${dirName}.zip 版本号.`, "log-success");
     }
 
-    updateTabStatus(tabId, "success");
-
     // 发布成功，删除临时文件
     await cmdInvoke("delete_paths", {
       paths: [tempPublishDir],
@@ -1995,7 +1896,6 @@ const newPublishWpfClient = async () => {
 
 // 发布[WpfClient]服务
 const publishWpfClient = async () => {
-  currentLogTabId = undefined;
   const wpfClientItem = state.publishData.appconfigData.configItems.wpfClient;
   if (!wpfClientItem.clientPath) return true;
 
@@ -2040,10 +1940,6 @@ const publishWpfClient = async () => {
   // 遍历多台服务器逐个发布
   for (let srvIdx = 0; srvIdx < wpfServerArr.length; srvIdx++) {
     const wpfServer = wpfServerArr[srvIdx];
-    // 每台服务器一个日志标签页
-    const tabId = createLogTab(wpfClientName.value, wpfServer.name || "");
-    updateTabStatus(tabId, "running");
-    currentLogTabId = tabId;
     if (!wpfServer.id) {
       printInfoLog(
         ` ${wpfClientName.value} 未选择服务或该服务器不存在，请检查.`,
@@ -2293,8 +2189,6 @@ const publishWpfClient = async () => {
       printInfoLog(`已成功更新 ${dirName}.zip 版本号.`, "log-success");
     }
 
-    updateTabStatus(tabId, "success");
-
     // 发布成功，删除临时文件
     await cmdInvoke("delete_paths", {
       paths: [tempPublishDir],
@@ -2309,7 +2203,6 @@ const serverPublish = async (
   serverPathArr: ServerOptionType[],
   serverName: string
 ) => {
-  currentLogTabId = undefined;
   for (let j = 0; j < serverPathArr.length; j++) {
     const serverPath = serverPathArr[j];
     if (!serverPath.value) {
@@ -2327,125 +2220,112 @@ const serverPublish = async (
         return false;
       }
 
-      // 每个服务实例一个日志标签页
-      const tabId = createLogTab(serverName, server.name, serverPathVal.identity);
-      updateTabStatus(tabId, "running");
-      let instanceSuccess = false;
-      try {
-        instanceSuccess = await withLogTab(tabId, async () => {
-          // 闭包内保留已判空的实例标识与发布路径
-          const instanceIdentity = serverPathVal.identity as string;
-          const instancePath = serverPathVal.path as string;
-          const uName = server.account;
-          const uPwd = server.pwd;
-          const serverAddress = `${server.ip}:${server.port}`;
-          const logPrefix = formatServiceLog(server.name, server.ip, serverName, instanceIdentity);
+      const instanceIdentity = serverPathVal.identity as string;
+      const instancePath = serverPathVal.path as string;
+      const uName = server.account;
+      const uPwd = server.pwd;
+      const serverAddress = `${server.ip}:${server.port}`;
+      const logPrefix = formatServiceLog(server.name, server.ip, serverName, instanceIdentity);
 
-          /* 1.关闭服务 */
-          printInfoLog(`${logPrefix} 正在关闭...`);
-          let closeServiceResult;
-          if (server.os === 1) {
-            closeServiceResult = await switchWinService(
-              uName,
-              uPwd,
-              serverAddress,
-              instanceIdentity,
-              "stop"
-            );
-          } else if (server.os === 2) {
-            closeServiceResult = await switchDockerService(
-              uName,
-              uPwd,
-              serverAddress,
-              instanceIdentity,
-              "stop"
-            );
-          } else {
-            printInfoLog(
-              `未找到 ${displayOs(Number(server.os))} 部署环境，请检查.`,
-              "log-error"
-            );
-            return false;
-          }
-          if (!closeServiceResult) {
-            printInfoLog(`${logPrefix} 关闭失败.`, "log-error");
-            return false;
-          }
-          printInfoLog(`${logPrefix} 已关闭.`, "log-success");
-
-          /* 上传文件到服务器 */
-          const currLogIndex = printInfoLog(`${logPrefix} 正在上传文件...`);
-
-          // 获取项目输出路径
-          let localPath = projectAssemblyOutPath.value + "/" + serverName;
-          const remotePath = removeSlash(instancePath);
-          const projectFiles = await readDirFiles(localPath);
-          if (projectFiles.length < 1) {
-            printInfoLog(
-              `未获取到 ${serverName} 项目的程序集文件，可点击【获取程序集】排查.`,
-              "log-warning"
-            );
-            // return;
-          }
-          let uploadFileNumber: UploadFileNumberType = {
-            currNumber: 0,
-            totalNumber: projectFiles.length,
-            prefix: "已上传：",
-          };
-          for (let l = 0; l < projectFiles.length; l++) {
-            await checkCanContinueHome();
-            const projectFile = projectFiles[l];
-            const uploadServerFileResult = await uploadServerFilesWithRetry({
-              localPaths: [`${localPath}/${projectFile}`],
-              remotePaths: [`${remotePath}/${projectFile}`],
-              username: uName,
-              password: uPwd,
-              server: serverAddress,
-            });
-            if (uploadServerFileResult.code !== 0) {
-              printInfoLog(
-                `${logPrefix} 发布失败：${uploadServerFileResult.data}.`,
-                "log-error"
-              );
-              return false;
-            }
-            uploadFileNumber.currNumber++;
-            updateLogProgress(currLogIndex, uploadFileNumber.prefix || "", uploadFileNumber.currNumber, uploadFileNumber.totalNumber);
-          }
-          printInfoLog(
-            `${logPrefix} 已将 ${projectFiles.length} 个文件上传到服务器.`,
-            "log-success"
-          );
-          printInfoLog(`${logPrefix} 正在启动.`);
-          let startServiceResult;
-          if (server.os === 1) {
-            startServiceResult = await switchWinService(
-              uName,
-              uPwd,
-              serverAddress,
-              instanceIdentity,
-              "start"
-            );
-          } else if (server.os === 2) {
-            startServiceResult = await switchDockerService(
-              uName,
-              uPwd,
-              serverAddress,
-              instanceIdentity,
-              "start"
-            );
-          }
-          if (!startServiceResult) {
-            printInfoLog(`${logPrefix} 启动失败.`, "log-error");
-            return false;
-          }
-          printInfoLog(`${logPrefix} 发布成功.`, "log-success");
-          return true;
-        });
-      } finally {
-        updateTabStatus(tabId, instanceSuccess ? "success" : "error");
+      /* 1.关闭服务 */
+      printInfoLog(`${logPrefix} 正在关闭...`);
+      let closeServiceResult;
+      if (server.os === 1) {
+        closeServiceResult = await switchWinService(
+          uName,
+          uPwd,
+          serverAddress,
+          instanceIdentity,
+          "stop"
+        );
+      } else if (server.os === 2) {
+        closeServiceResult = await switchDockerService(
+          uName,
+          uPwd,
+          serverAddress,
+          instanceIdentity,
+          "stop"
+        );
+      } else {
+        printInfoLog(
+          `未找到 ${displayOs(Number(server.os))} 部署环境，请检查.`,
+          "log-error"
+        );
+        return false;
       }
-      if (!instanceSuccess) return false;
+      if (!closeServiceResult) {
+        printInfoLog(`${logPrefix} 关闭失败.`, "log-error");
+        return false;
+      }
+      printInfoLog(`${logPrefix} 已关闭.`, "log-success");
+
+      /* 上传文件到服务器 */
+      const currLogIndex = printInfoLog(`${logPrefix} 正在上传文件...`);
+
+      // 获取项目输出路径
+      let localPath = projectAssemblyOutPath.value + "/" + serverName;
+      const remotePath = removeSlash(instancePath);
+      const projectFiles = await readDirFiles(localPath);
+      if (projectFiles.length < 1) {
+        printInfoLog(
+          `未获取到 ${serverName} 项目的程序集文件，可点击【获取程序集】排查.`,
+          "log-warning"
+        );
+        // return;
+      }
+      let uploadFileNumber: UploadFileNumberType = {
+        currNumber: 0,
+        totalNumber: projectFiles.length,
+        prefix: "已上传：",
+      };
+      for (let l = 0; l < projectFiles.length; l++) {
+        await checkCanContinueHome();
+        const projectFile = projectFiles[l];
+        const uploadServerFileResult = await uploadServerFilesWithRetry({
+          localPaths: [`${localPath}/${projectFile}`],
+          remotePaths: [`${remotePath}/${projectFile}`],
+          username: uName,
+          password: uPwd,
+          server: serverAddress,
+        });
+        if (uploadServerFileResult.code !== 0) {
+          printInfoLog(
+            `${logPrefix} 发布失败：${uploadServerFileResult.data}.`,
+            "log-error"
+          );
+          return false;
+        }
+        uploadFileNumber.currNumber++;
+        updateLogProgress(currLogIndex, uploadFileNumber.prefix || "", uploadFileNumber.currNumber, uploadFileNumber.totalNumber);
+      }
+      printInfoLog(
+        `${logPrefix} 已将 ${projectFiles.length} 个文件上传到服务器.`,
+        "log-success"
+      );
+      printInfoLog(`${logPrefix} 正在启动.`);
+      let startServiceResult;
+      if (server.os === 1) {
+        startServiceResult = await switchWinService(
+          uName,
+          uPwd,
+          serverAddress,
+          instanceIdentity,
+          "start"
+        );
+      } else if (server.os === 2) {
+        startServiceResult = await switchDockerService(
+          uName,
+          uPwd,
+          serverAddress,
+          instanceIdentity,
+          "start"
+        );
+      }
+      if (!startServiceResult) {
+        printInfoLog(`${logPrefix} 启动失败.`, "log-error");
+        return false;
+      }
+      printInfoLog(`${logPrefix} 发布成功.`, "log-success");
     }
   }
   return true;
@@ -2670,7 +2550,6 @@ const getProjectOutPath = async () => {
 
 // 获取应用程序集
 const getApplicationAssemblys = async (isOpenDir: boolean = false) => {
-  currentLogTabId = undefined;
   // 获取项目输出路径
   let projectOutPath = projectAssemblyOutPath.value;
   let isSuccess = true;
@@ -4194,10 +4073,6 @@ const onEnvironmentChange = async (val: number) => {
 // 清空日志
 const onRemoveLogs = () => {
   logPrintInfo.value = [];
-  logTabs.value = [];
-  tabContentRefs.value = {};
-  activeLogTab.value = "main";
-  currentLogTabId = undefined;
   generatePublishLog.value.data = "";
   generatePublishLog.value.logs = "";
 };
@@ -4273,11 +4148,9 @@ const executeScheduledPublish = async (schedule: RowPublishScheduleType) => {
     let success = false;
     if (schedule.publishType === '一键发布') {
       success = await oneClickPublishing();
-      currentLogTabId = undefined;
       if (success) await getProjectDefault();
     } else if (schedule.publishType === '手动发布') {
       success = await projectPublish();
-      currentLogTabId = undefined;
       if (success) await getProjectDefault();
     }
 
@@ -4303,12 +4176,7 @@ const executeScheduledPublish = async (schedule: RowPublishScheduleType) => {
 
 /** 收集执行失败时的日志内容 */
 const collectFailLogs = () => {
-  // 服务发布日志已分标签页存放，失败原因需要一并收集
-  const allLogs = logTabs.value.reduce<LogPrintType[]>(
-    (acc, tab) => acc.concat(tab.logs),
-    [...logPrintInfo.value]
-  );
-  const logs = allLogs
+  const logs = logPrintInfo.value
     .filter(log => log.type === "log-error" || log.type === "log-warning")
     .map(log => log.content.value)
     .filter(Boolean);
@@ -4325,13 +4193,11 @@ const collectFailLogs = () => {
  * @param content 日志内容
  * @param type：log-info、log-warning、log-error、log-success
  * @param showDate 是否显示日期
- * @param tabId 指定日志标签页；不传则写入当前上下文所在的标签页
  */
 const printInfoLog = (
   content: string,
   type: "log-info" | "log-warning" | "log-error" | "log-success" = "log-info",
-  showDate: boolean = true,
-  tabId?: string
+  showDate: boolean = true
 ) => {
   let nowDate = "";
   if (showDate) {
@@ -4349,37 +4215,23 @@ const printInfoLog = (
     },
   };
 
-  // 服务发布上下文：写入对应标签页
-  const targetTabId = tabId ?? currentLogTabId;
-  if (targetTabId) {
-    const tab = logTabs.value.find((t) => t.id === targetTabId);
-    if (tab) {
-      tab.logs.push(logInfo);
-      // 失败日志自动把仍在运行中的标签页标记为失败
-      if (type === "log-error" && tab.status === "running") tab.status = "error";
-      scrollLogToBottom(targetTabId);
-      return tab.logs.length - 1;
-    }
-  }
-
   logPrintInfo.value.push(logInfo);
-  scrollLogToBottom("main");
+  nextTick(() => {
+    const el = logContentRef.value;
+    if (el) el.scrollTop = el.scrollHeight;
+  });
   return logPrintInfo.value.length - 1;
 };
 
-// 更新上传进度（写入当前上下文所在的日志数组）
+// 更新上传进度
 const updateLogProgress = (
   logIndex: number,
   prefix: string,
   currNumber: number,
-  totalNumber: number,
-  tabId?: string
+  totalNumber: number
 ) => {
-  const targetTabId = tabId ?? currentLogTabId;
-  const logs = targetTabId
-    ? logTabs.value.find((t) => t.id === targetTabId)?.logs
-    : logPrintInfo.value;
-  if (!logs || !logs[logIndex]) return;
+  const logs = logPrintInfo.value;
+  if (!logs[logIndex]) return;
   logs[logIndex].content.uploadFile.prefix = prefix;
   logs[logIndex].content.uploadFile.currNumber = currNumber;
   logs[logIndex].content.uploadFile.totalNumber = totalNumber;
@@ -4560,62 +4412,10 @@ $log-console-text: #ffffff;
       // 日志区自身不滚动（overflow 覆盖 .card-item-content 的 overflow-y），日志超出由内部 .log-tab-pane-content 滚动
       .log-content {
         box-sizing: border-box;
+        background-color: #545c64;
         counter-reset: line-number;
         padding-right: 1em;
         text-align: left;
-        overflow: hidden;
-        // 与 .card-item-content 一样自适应剩余高度
-        flex: 1 1 auto;
-        min-height: 0;
-        display: flex;
-        flex-direction: column;
-
-        .log-tabs {
-          height: 100%;
-          flex: 1 1 auto;
-          min-height: 0;
-          display: flex;
-          flex-direction: column;
-
-          // 只有一个页签时隐藏页签栏，避免多出一行无意义的标签
-          &.log-tabs-single :deep(.el-tabs__header) {
-            display: none;
-          }
-
-          :deep(.el-tabs__content) {
-            flex: 1;
-            overflow: hidden;
-            padding: 0;
-          }
-
-          :deep(.el-tab-pane) {
-            height: 100%;
-          }
-        }
-
-        .log-tab-pane-content {
-          box-sizing: border-box;
-          height: 100%;
-          overflow-y: auto;
-          background-color: $log-console-bg;
-          color: $log-console-text;
-          padding: 8px 1em 8px 8px;
-          text-align: left;
-
-          // 日志行配色固定（终端风格），覆盖 theme/app.scss 中跟随主题的 .log-* 定义
-          .log-info {
-            color: $log-console-text;
-          }
-          .log-warning {
-            color: var(--el-color-warning);
-          }
-          .log-error {
-            color: var(--el-color-danger);
-          }
-          .log-success {
-            color: var(--el-color-success);
-          }
-        }
       }
     }
 

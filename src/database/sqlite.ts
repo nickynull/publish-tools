@@ -196,6 +196,16 @@ async function ensureSchema(database: Database) {
         await database.execute("ALTER TABLE t_settings ADD COLUMN publish_module_order TEXT DEFAULT 'WebApiHost,WebClient,ScheduleServer,WpfClient,SpcMonitor'");
     }
 
+    // t_settings 加「一步获取程序集」开关（项目发布(STEP)：开启后隐藏打包WPF按钮，操作并入获取程序集）
+    if (!syncSettingsColumns.some((column) => column.name === "step_pack_wpf_in_get")) {
+        await database.execute("ALTER TABLE t_settings ADD COLUMN step_pack_wpf_in_get INTEGER DEFAULT 0");
+    }
+
+    // t_settings 加「显示一键发布按钮」开关（项目发布(STEP)顶部平铺按钮区是否显示一键发布）
+    if (!syncSettingsColumns.some((column) => column.name === "step_show_one_click")) {
+        await database.execute("ALTER TABLE t_settings ADD COLUMN step_show_one_click INTEGER DEFAULT 1");
+    }
+
     // ========== 改列（服务重试列名由 stop_retry 统一为 retry，老库存在旧列则逐列重命名） ==========
     // 注：Rust 端 migration 未在 main.rs 注册（死代码），实际建表/改列均由本函数承担
     const settingsColumns = await database.select<{ name: string }[]>("PRAGMA table_info(t_settings)");

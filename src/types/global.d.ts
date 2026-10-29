@@ -145,14 +145,6 @@ declare interface DataResultType<T = any> {
 	data: T;
 }
 
-// 日志标签页
-declare type LogTabType = {
-	id: string;
-	label: string;
-	logs: LogPrintType[];
-	status: 'info' | 'running' | 'success' | 'error' | 'pending';
-};
-
 // 上传文件数量
 declare type LogPrintType = {
 	// 自增 id：供进度更新按 id 定位日志行（行数裁剪会使数组下标前移，不能再用下标）；

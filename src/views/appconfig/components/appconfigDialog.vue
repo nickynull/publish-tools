@@ -743,31 +743,9 @@ const onSlnFileChange = async () => {
   return true;
 };
 
-// 项目管理切换监听：加载该项目在当前环境下的已有配置；没有则切换为全新配置表单
+// 项目管理切换：按「项目+当前环境」载入目标项目的应用配置
 const onProjectChange = async (val: number) => {
-  const projectId = Number(val);
-  await getServerList(projectId);
-  const prevEnvironment = state.ruleForm.environment || 1;
-  const result = await appconfigDb.getPublishAppconfigs(projectId, prevEnvironment);
-  formReset();
-  state.ruleForm.projectId = projectId;
-  state.ruleForm.environment = prevEnvironment || 1;
-  if (result.code === 0 && result.data.data && result.data.data.id) {
-    // 已有配置：加载并切换为编辑态
-    const data = result.data.data;
-    loadAppconfigToForm(data);
-    state.dialog.type = "edit";
-    state.dialog.editId = data.id;
-    state.dialog.title = `${formDisabled.value ? "查看" : "修改"}应用配置`;
-    state.dialog.submitTxt = formDisabled.value ? "确 定" : "修 改";
-  } else {
-    // 无配置：全新表单（新增态）
-    state.dialog.type = "add";
-    state.dialog.editId = null;
-    state.dialog.title = `${formDisabled.value ? "查看" : "新增"}应用配置`;
-    state.dialog.submitTxt = formDisabled.value ? "确 定" : "新 增";
-  }
-  appconfigDialogFormRef.value?.clearValidate();
+  await loadAppconfigForSelection(val, state.ruleForm.environment);
 };
 
 // 是否 10.2+ 版本切换
@@ -823,9 +801,9 @@ const onDllModeChange = async (val: string) => {
   ];
 };
 
-// 环境切换
+// 环境切换：与切换项目一致，按「项目+环境」重新载入配置，避免表单仍是旧环境的配置
 const onEnvironmentChange = async (val: number) => {
-  console.log("环境切换为：", val);
+  await loadAppconfigForSelection(state.ruleForm.projectId, val);
 };
 
 // 获取模式切换
@@ -982,6 +960,74 @@ const normalizeWpfClientServer = (wpfClient: WpfClientConfigType) => {
       },
     ];
   }
+};
+
+// 将应用配置行填充到表单（打开修改弹窗、弹窗内切换项目/环境时复用）
+const applyAppconfigRow = (row: RowAppconfigType) => {
+  state.dialog.type = "edit";
+  state.dialog.editId = row?.id;
+  Object.assign(state.ruleForm, row);
+  normalizeWpfClientServer(state.ruleForm.configItems.wpfClient);
+  // 存量配置没有[拉取最新代码]开关时按开启处理
+  if (state.ruleForm.configItems.isPullLatest === null || state.ruleForm.configItems.isPullLatest === undefined) {
+    state.ruleForm.configItems.isPullLatest = 1;
+  }
+  // 生成目录/压缩文件按配置本身重置，避免沿用上一个项目的取值
+  generateDirs.value = state.ruleForm.configItems.wpfClient.generateDirJson
+    ? JSON.parse(state.ruleForm.configItems.wpfClient.generateDirJson)
+    : [];
+  compressFiles.value = state.ruleForm.configItems.wpfClient.compressFileJson
+    ? JSON.parse(state.ruleForm.configItems.wpfClient.compressFileJson)
+    : [];
+  dllModeDate.value = undefined;
+
+  if (state.ruleForm.dllModeValue && state.ruleForm.dllMode == "日期范围") {
+    let dateJson = JSON.parse(state.ruleForm.dllModeValue);
+    let beginDate = new Date(dateJson[0]);
+    let endDate = new Date(dateJson[1]);
+    dllModeDate.value = [beginDate, endDate];
+  }
+
+  if (state.ruleForm.dllModeValue && state.ruleForm.dllMode == "TFS") {
+    selectTfsItem.value = JSON.parse(state.ruleForm.dllModeValue);
+  }
+
+  if (state.ruleForm.dllModeValue && state.ruleForm.dllMode == "Git") {
+    selectGitItem.value = JSON.parse(state.ruleForm.dllModeValue);
+    // 兼容历史数据：早期该模式可能被写成 "commit"，统一成界面选项值「变更集」，否则单选组无法回显
+    if (isCommitSelectModel(selectGitItem.value.selectModel)) {
+      selectGitItem.value.selectModel = "变更集";
+    }
+  }
+
+  appconfigDialogFormRef.value?.clearValidate();
+};
+
+// 按「项目+环境」载入应用配置；目标项目该环境无配置时清空表单并转为新增
+const loadAppconfigForSelection = async (projectId: number | null, environment: number | null) => {
+  if (!projectId) return;
+  // 环境未选择时按 Dev 兜底，避免查询条件为空
+  const envVal = environment || 1;
+  // 服务器下拉选项需先就绪，配置里的服务器才能在界面上正常显示
+  await getServerList(projectId);
+  const result = await appconfigDb.getPublishAppconfigs(projectId, envVal);
+  const row = result.code === 0 ? result.data?.data : null;
+
+  if (row && row.id) {
+    applyAppconfigRow(row);
+    state.dialog.title = `${formDisabled.value ? "查看" : "修改"}应用配置`;
+    state.dialog.submitTxt = "修 改";
+    return;
+  }
+
+  // 目标项目该环境暂无配置：保留项目/环境选择，其余按新增处理，
+  // 五个模块的服务器勾选一并清空，避免旧项目的服务器被写进新项目配置
+  formReset();
+  state.ruleForm.projectId = projectId;
+  state.ruleForm.environment = envVal;
+  state.dialog.title = "新增应用配置";
+  state.dialog.submitTxt = "新 增";
+  appconfigDialogFormRef.value?.clearValidate();
 };
 
 // 选择[WebApi]服务器切换
@@ -1338,45 +1384,6 @@ const formReset = () => {
   };
 };
 
-// 将应用配置记录加载到表单（打开弹窗编辑态 与 弹窗内切换项目管理 共用）
-const loadAppconfigToForm = (row: RowAppconfigType) => {
-  Object.assign(state.ruleForm, row);
-  normalizeWpfClientServer(state.ruleForm.configItems.wpfClient);
-  // 存量配置没有[拉取最新代码]开关时按开启处理
-  if (state.ruleForm.configItems.isPullLatest === null || state.ruleForm.configItems.isPullLatest === undefined) {
-    state.ruleForm.configItems.isPullLatest = 1;
-  }
-  if (state.ruleForm.configItems.wpfClient.generateDirJson) {
-    generateDirs.value = JSON.parse(
-      state.ruleForm.configItems.wpfClient.generateDirJson
-    );
-  }
-  if (state.ruleForm.configItems.wpfClient.compressFileJson) {
-    compressFiles.value = JSON.parse(
-      state.ruleForm.configItems.wpfClient.compressFileJson
-    );
-  }
-
-  if (state.ruleForm.dllModeValue && state.ruleForm.dllMode == "日期范围") {
-    let dateJson = JSON.parse(state.ruleForm.dllModeValue);
-    let beginDate = new Date(dateJson[0]);
-    let endDate = new Date(dateJson[1]);
-    dllModeDate.value = [beginDate, endDate];
-  }
-
-  if (state.ruleForm.dllModeValue && state.ruleForm.dllMode == "TFS") {
-    selectTfsItem.value = JSON.parse(state.ruleForm.dllModeValue);
-  }
-
-  if (state.ruleForm.dllModeValue && state.ruleForm.dllMode == "Git") {
-    selectGitItem.value = JSON.parse(state.ruleForm.dllModeValue);
-    // 兼容历史数据：早期该模式可能被写成 "commit"，统一成界面选项值「变更集」，否则单选组无法回显
-    if (isCommitSelectModel(selectGitItem.value.selectModel)) {
-      selectGitItem.value.selectModel = "变更集";
-    }
-  }
-};
-
 // 打开弹窗
 const openDialog = async (type: string, row: RowAppconfigType | undefined) => {
   /* Start: 重置表单内容 */
@@ -1388,12 +1395,7 @@ const openDialog = async (type: string, row: RowAppconfigType | undefined) => {
   await getGitList();
   nextTick(async () => {
     if (type === "edit" || type === "viewer") {
-      state.dialog.type = "edit";
-      state.dialog.editId = row?.id;
-      loadAppconfigToForm(row as RowAppconfigType);
-
-      appconfigDialogFormRef.value?.clearValidate();
-
+      applyAppconfigRow(row as RowAppconfigType);
       state.dialog.title = `${formDisabled.value ? "查看" : "修改"}应用配置`;
       state.dialog.submitTxt = "修 改";
     } else {

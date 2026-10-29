@@ -12,6 +12,8 @@ const _default: RowSettingsType = {
     winServiceStartTimeout: 20,
     winServiceStopTimeout: 20,
     publishModuleOrder: 'WebApiHost,WebClient,ScheduleServer,WpfClient,SpcMonitor',
+    stepPackWpfInGet: 0,
+    stepShowOneClick: 1,
     sshMcpUrl: 'http://127.0.0.1:61823',
     sshMcpAutoSync: 0,
     startupMenu: 'workstation',
@@ -91,4 +93,24 @@ export function parsePublishModuleOrder(raw: string): string[] {
 export function getPublishModuleOrder(): string[] {
     const s = cached ?? defaultSettings();
     return parsePublishModuleOrder(String(s.publishModuleOrder || ''));
+}
+
+/**
+ * 同步读「一步获取程序集」（打包WPF合并到获取程序集）开关（项目发布(STEP) 专用）。
+ * 开启后 STEP 页隐藏【打包WPF】按钮，打包操作在【获取程序集】成功后自动执行。
+ * 调用前应已 await loadPublishSettings()。
+ */
+export function isStepPackWpfInGet(): boolean {
+    const s = cached ?? defaultSettings();
+    return Number(s.stepPackWpfInGet) === 1;
+}
+
+/**
+ * 同步读「显示一键发布按钮」开关（项目发布(STEP) 专用）。
+ * 开启后 STEP 页顶部平铺按钮区第一位显示【一键发布】。
+ * 调用前应已 await loadPublishSettings()。
+ */
+export function isStepOneClickVisible(): boolean {
+    const s = cached ?? defaultSettings();
+    return Number(s.stepShowOneClick) !== 0;
 }

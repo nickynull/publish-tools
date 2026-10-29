@@ -38,44 +38,6 @@
             </el-form>
 
             <el-tabs v-model="activeTab" class="server-file-tabs">
-                <el-tab-pane label="上传记录" name="upload">
-                    <div class="pane-fill">
-                        <div class="exist-file-bar">
-                            <span class="hint">存在文件</span>
-                            <el-radio-group v-model="conflictMode" size="small" :disabled="busy">
-                                <el-radio border value="skip">跳过</el-radio>
-                                <el-radio border value="overwrite">覆盖</el-radio>
-                                <el-radio border value="keepLatest">保留最新</el-radio>
-                            </el-radio-group>
-                            <span class="hint exist-hint">
-                                同路径已有同名文件时：跳过 = 保留服务器文件，覆盖 = 用本地文件替换，保留最新 = 比较两端修改时间后保留较新的那份
-                            </span>
-                            <div class="exist-file-actions">
-                                <el-button size="small" :disabled="uploading || tasks.length === 0"
-                                    :title="uploading ? '上传进行中，无法清空' : ''" @click="onClearTasks">
-                                    清空
-                                </el-button>
-                            </div>
-                        </div>
-                        <el-table :data="tasks" size="small" height="100%" class="fill-table" empty-text="尚未选择文件">
-                            <el-table-column type="index" label="#" width="50" />
-                            <el-table-column prop="fileName" label="文件" min-width="150" show-overflow-tooltip />
-                            <el-table-column prop="remotePath" label="目标路径" min-width="240" show-overflow-tooltip />
-                            <el-table-column label="状态" width="100">
-                                <template #default="{ row }">
-                                    <el-tag size="small" :type="row.tagType">{{ row.status }}</el-tag>
-                                </template>
-                            </el-table-column>
-                            <el-table-column label="进度" width="170">
-                                <template #default="{ row }">
-                                    <el-progress :percentage="row.percent" :status="row.progressStatus"
-                                        :stroke-width="10" />
-                                </template>
-                            </el-table-column>
-                            <el-table-column prop="message" label="结果" min-width="160" show-overflow-tooltip />
-                        </el-table>
-                    </div>
-                </el-tab-pane>
                 <el-tab-pane label="浏览文件" name="browse">
                     <div class="pane-fill">
                         <div class="browse-bar">
@@ -159,6 +121,50 @@
                         </el-table>
                     </div>
                 </el-tab-pane>
+                <el-tab-pane label="文件上传" name="upload">
+                    <div class="pane-fill">
+                        <div class="exist-file-bar">
+                            <span class="hint">存在文件</span>
+                            <el-radio-group v-model="conflictMode" size="small" :disabled="busy">
+                                <el-radio border value="skip">跳过</el-radio>
+                                <el-radio border value="overwrite">覆盖</el-radio>
+                                <el-radio border value="keepLatest">保留最新</el-radio>
+                            </el-radio-group>
+                            <span class="hint exist-hint">
+                                同路径已有同名文件时：跳过 = 保留服务器文件，覆盖 = 用本地文件替换，保留最新 = 比较两端修改时间后保留较新的那份
+                            </span>
+                            <div class="exist-file-actions">
+                                <el-button size="small" type="primary" :disabled="!canUpload"
+                                    :loading="uploading" :title="canUpload ? '' : '请先在上方勾选管理路径'"
+                                    @click="onChooseFiles">
+                                    选择文件上传
+                                </el-button>
+                                <el-button size="small" :disabled="uploading || tasks.length === 0"
+                                    :title="uploading ? '上传进行中，无法清空上传记录' : ''" @click="onClearTasks">
+                                    清空上传记录
+                                </el-button>
+                            </div>
+                        </div>
+                        <el-table :data="tasks" size="small" height="100%" class="fill-table"
+                            empty-text="尚未选择文件，点右上「选择文件上传」">
+                            <el-table-column type="index" label="#" width="50" />
+                            <el-table-column prop="fileName" label="文件" min-width="150" show-overflow-tooltip />
+                            <el-table-column prop="remotePath" label="目标路径" min-width="240" show-overflow-tooltip />
+                            <el-table-column label="状态" width="100">
+                                <template #default="{ row }">
+                                    <el-tag size="small" :type="row.tagType">{{ row.status }}</el-tag>
+                                </template>
+                            </el-table-column>
+                            <el-table-column label="进度" width="170">
+                                <template #default="{ row }">
+                                    <el-progress :percentage="row.percent" :status="row.progressStatus"
+                                        :stroke-width="10" />
+                                </template>
+                            </el-table-column>
+                            <el-table-column prop="message" label="结果" min-width="160" show-overflow-tooltip />
+                        </el-table>
+                    </div>
+                </el-tab-pane>
                 <el-tab-pane label="操作日志" name="log">
                     <div class="pane-fill log-pane">
                         <div class="log-toolbar">
@@ -193,9 +199,6 @@
                 <span v-if="busy || loadingDir" class="hint footer-hint">{{ busyHint }}</span>
                 <el-button v-if="busy || loadingDir" type="danger" plain :loading="terminating" @click="onTerminate">
                     终止操作
-                </el-button>
-                <el-button type="primary" :disabled="!canUpload" :loading="uploading" @click="onChooseFiles">
-                    选择文件上传
                 </el-button>
                 <el-button @click="onClose" size="default" :disabled="busy">关闭</el-button>
             </div>
@@ -280,7 +283,8 @@ const server = ref<RowServerType | null>(null);
 const uploadPaths = ref<string[]>([]);
 const selectedPaths = ref<string[]>([]);
 const conflictMode = ref<ConflictMode>(readConflictMode());
-const activeTab = ref<"upload" | "browse" | "log">("upload");
+// 默认停在「浏览文件」：页签顺序为 浏览文件 → 文件上传 → 操作日志，默认值与首个页签一致
+const activeTab = ref<"upload" | "browse" | "log">("browse");
 
 const tasks = ref<UploadTask[]>([]);
 const uploading = ref(false);
@@ -423,7 +427,8 @@ const openDialog = (row: RowServerType) => {
     loadingDir.value = false;
     terminating.value = false;
     resetDownloadState();
-    activeTab.value = "upload";
+    // 每次打开都回到首个页签「浏览文件」（上一次会话可能停在其它页签）
+    activeTab.value = "browse";
     // 操作日志不持久化：每次打开清空，重新记录本次会话
     onRemoveLogs();
     printInfoLog(`打开文件管理：${row.name}（${row.ip}:${row.port}）`);
@@ -1008,7 +1013,7 @@ $log-console-text: #ffffff;
     }
 }
 
-/* 「存在文件」：上传记录页签内、列头上方，两个选项间距收紧，说明文字与选项拉开距离 */
+/* 「存在文件」：文件上传页签内、列头上方，两个选项间距收紧，说明文字与选项拉开距离 */
 .exist-file-bar {
     display: flex;
     align-items: center;
@@ -1031,12 +1036,13 @@ $log-console-text: #ffffff;
         margin-left: 6px;
     }
 
-    /* 右侧操作（清空）：始终贴右，随 flex-wrap 落到当前行末端 */
+    /* 右侧操作（选择文件上传 / 清空上传记录）：始终贴右，随 flex-wrap 落到当前行末端 */
     .exist-file-actions {
         margin-left: auto;
         flex: 0 0 auto;
         display: flex;
         align-items: center;
+        gap: 8px;
     }
 }
 

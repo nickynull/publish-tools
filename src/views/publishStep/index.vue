@@ -541,7 +541,7 @@ import {
     removeSlash,
     getDefaultSubObject,
 } from "@/utils/other";
-import { loadPublishSettings, getPublishModuleOrder } from "@/utils/publishSettings";
+import { loadPublishSettings, getPublishModuleOrder, isStepPackWpfInGet, isStepOneClickVisible } from "@/utils/publishSettings";
 import mittBus from "@/utils/mitt";
 import { useStepLog } from "@/composables/useStepLog";
 import {
@@ -625,9 +625,15 @@ const spcMonitorName = ref("SpcMonitor");
 // wpfClient 的额外行（生成目录/打包）在模板内用 key 区分
 // 展示顺序跟随设置页「发布顺序」配置（顺序外的模块名排在末尾）
 const publishModuleOrder = ref<string[]>(getPublishModuleOrder());
+// 「一步获取程序集」（打包WPF合并到获取程序集）开关（设置页保存后经 settingsChanged 刷新；执行前以 loadPublishSettings 后的缓存为准）
+const stepPackWpfMerged = ref(isStepPackWpfInGet());
+// 「一键发布按钮」显示开关（设置页保存后经 settingsChanged 刷新）
+const stepOneClickVisible = ref(isStepOneClickVisible());
 const refreshPublishModuleOrder = async () => {
     await loadPublishSettings();
     publishModuleOrder.value = getPublishModuleOrder();
+    stepPackWpfMerged.value = isStepPackWpfInGet();
+    stepOneClickVisible.value = isStepOneClickVisible();
 };
 const appModuleList = computed(() => {
     const items = state.publishData.appconfigData.configItems;
@@ -655,6 +661,8 @@ const appModuleList = computed(() => {
 // 服务的全部发布路径（把 serverPathArr[].value 拍平，供模板单层循环）
 const getServerValues = (server: SelectServerType) =>
     (server.serverPathArr || []).flatMap((sp) => sp.value || []);
+// 是否发布 WpfClient（应用配置配置了客户端生成路径且未被移除；决定打包WPF是否参与流程）
+const hasWpfClientModule = (): boolean => appModuleList.value.some((mod) => mod.key === "wpfClient");
 const projectAssemblyOutPath = ref("");
 const generatePublishLog = ref({
     isEnable: true,
@@ -673,6 +681,15 @@ const appconfigDb = useAppconfigDb();
 
 const state = reactive({
     funModule: [
+        {
+            title: "一键发布",
+            desc: "依次执行：获取程序集 → 打包WPF（不发布WPF时自动跳过） → 上传程序集 → 发布，任一步失败即中止",
+            iconBgColor: "--next-color-danger-lighter",
+            iconFont: "smom-icon smom-icon-fabu",
+            iconColor: "--el-color-danger",
+            loading: false,
+            loadingText: "发布中",
+        },
         {
             title: "获取程序集",
             desc: "按 TFS/Git 变更或 DLL 名称等配置，把要发布的文件复制到本机程序集输出路径",
@@ -790,11 +807,13 @@ const currModuleIndex = ref(0);
 // ==================== 更多功能下拉菜单 ====================
 // 收纳进「更多功能」菜单的功能标题（顶部不再平铺展示）
 const moreMenuTitles = ["备份", "备份管理", "服务管理", "查看服务端程序集", "查看本机程序集", "创建生成DLL脚本"];
-// 顶部平铺卡片：排除收纳进菜单的功能
+// 顶部平铺卡片：排除收纳进菜单的功能；一键发布排在第一位、按设置开关显隐；「一步获取程序集」开启或未发布 WpfClient 时隐藏打包WPF卡片
 const mainFunModules = computed(() =>
     state.funModule
         .map((item, index) => ({ ...item, index }))
         .filter((item) => !moreMenuTitles.includes(item.title))
+        .filter((item) => !(item.title === "一键发布" && !stepOneClickVisible.value))
+        .filter((item) => !(item.title === "打包WPF" && (stepPackWpfMerged.value || !hasWpfClientModule())))
 );
 // 菜单项（携带在原 funModule 数组中的索引，供点击回调使用）
 const moreMenuItems = computed(() =>
@@ -1000,10 +1019,32 @@ const onFunModuleHandle = async (index: number) => {
         }
     }
 
+    // 一键发布：一次性确认整个链路（不再逐步确认）
+    if (title === "一键发布") {
+        try {
+            await ElMessageBox.confirm(
+                "一键发布将依次执行：获取程序集 → 打包WPF → 上传程序集 → 发布，任一步失败即中止。<br/><br/>建议发布前先执行【备份】！是否继续？",
+                "一键发布确认",
+                {
+                    confirmButtonText: "开始一键发布",
+                    cancelButtonText: "取消",
+                    dangerouslyUseHTMLString: true,
+                    type: "warning",
+                }
+            );
+        } catch {
+            return;
+        }
+    }
+
     // 获取程序集/上传程序集前：检查本机程序集路径（获取/上传的目标目录）下是否有 10 分钟内修改的文件，
     // 没有则可能尚未完成构建，让用户决定是否继续
     if (title === "获取程序集" || title === "上传程序集" || title === "打包WPF") {
         if (!(await checkClientPathRecentFiles(title))) return;
+    }
+    // 一键发布：仅做获取程序集前的一次性检查（获取完成后产物均为最新，上传无需重复检查）
+    if (title === "一键发布") {
+        if (!(await checkClientPathRecentFiles("获取程序集"))) return;
     }
 
     // 日志不再每次执行前自动清空：单页签持续累积，靠行数上限滚动淘汰；仅首次进入时打印项目/环境信息
@@ -1029,6 +1070,7 @@ const onFunModuleHandle = async (index: number) => {
         stepPublishApi.resetStopState();
     }
     if (isSuccess) {
+        if (title === "一键发布") printInfoLog("一键发布成功。");
         if (title === "获取程序集") printInfoLog("获取程序集成功。");
         if (title === "备份") printInfoLog("备份成功。");
         if (title === "打包WPF") printInfoLog("打包WPF成功。");
@@ -1038,12 +1080,64 @@ const onFunModuleHandle = async (index: number) => {
     printLogDivider(`【${title}】执行结束`);
 };
 
+// 一键发布链路：获取程序集 → 打包WPF（按需） → 上传程序集 → 发布，任一步失败即中止
+// WPF 打包全程只执行一次：「一步获取程序集」开启时随获取程序集执行；未开启时在此作为独立步骤执行
+// 未发布 WpfClient（应用配置未配置或已移除）时不打包
+const executeOneClickPublish = async (): Promise<boolean> => {
+    const oneClickIndex = state.funModule.findIndex((item) => item.title === "一键发布");
+    const setStepLoadingText = (text: string) => {
+        if (oneClickIndex >= 0) state.funModule[oneClickIndex].loadingText = text;
+    };
+    // 此时 loadPublishSettings 已在 onFunModuleHandle 中刷新缓存，直接读缓存判断
+    const wpfMerged = isStepPackWpfInGet();
+
+    // 步骤1：获取程序集（合并开关开启时，打包WPF在其成功后自动执行）
+    setStepLoadingText("获取中");
+    if (!(await stepPublishApi.validateTfsLocalPath())) return false;
+    if (!(await stepPublishApi.getApplicationAssemblys(false))) return false;
+    printInfoLog("获取程序集成功。");
+
+    // 步骤2：打包WPF（合并开关关闭且配置了 WpfClient 模块时单独执行）
+    if (!wpfMerged && hasWpfClientModule()) {
+        printLogDivider(`开始执行【打包WPF】`);
+        setStepLoadingText("打包中");
+        if (!(await stepPublishApi.packWpfClient())) return false;
+        printInfoLog("打包WPF成功。");
+        printLogDivider(`【打包WPF】执行结束`);
+    }
+
+    // 步骤3：上传程序集
+    printLogDivider(`开始执行【上传程序集】`);
+    setStepLoadingText("上传中");
+    if (!(await stepPublishApi.uploadAssemblies())) return false;
+    printInfoLog("上传程序集成功。");
+    printLogDivider(`【上传程序集】执行结束`);
+
+    // 步骤4：发布
+    printLogDivider(`开始执行【发布】`);
+    setStepLoadingText("发布中");
+    if (!(await stepPublishApi.stepPublish())) return false;
+    printInfoLog("发布成功。");
+    printLogDivider(`【发布】执行结束`);
+    return true;
+};
+
 // 执行功能模块（界面按钮共用），返回是否成功
 const executeFunModule = async (title: string): Promise<boolean> => {
     switch (title) {
+        case "一键发布":
+            return await executeOneClickPublish();
         case "获取程序集": {
             if (!(await stepPublishApi.validateTfsLocalPath())) return false;
-            return await stepPublishApi.getApplicationAssemblys(false);
+            const gotAssemblys = await stepPublishApi.getApplicationAssemblys(false);
+            if (!gotAssemblys) return false;
+            // 「一步获取程序集」开启：获取成功后自动执行打包WPF（仅配置了 WpfClient 模块时）
+            if (isStepPackWpfInGet() && hasWpfClientModule()) {
+                printLogDivider(`开始执行【打包WPF】`);
+                if (!(await stepPublishApi.packWpfClient())) return false;
+                printLogDivider(`【打包WPF】执行结束`);
+            }
+            return true;
         }
         case "备份":
             return await stepPublishApi.backupServices();

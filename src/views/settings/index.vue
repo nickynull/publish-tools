@@ -36,6 +36,17 @@
                         <span class="settings-tip">{{ $t('message.settings.oneClickPublishTip') }}</span>
                     </el-form-item>
 
+                    <!-- 项目发布(STEP) -->
+                    <el-divider content-position="left">{{ $t('message.settings.stepPublishSection') }}</el-divider>
+                    <el-form-item :label="$t('message.settings.stepShowOneClick')">
+                        <el-switch v-model="form.stepShowOneClick" :active-value="1" :inactive-value="0" />
+                        <span class="settings-tip">{{ $t('message.settings.stepShowOneClickTip') }}</span>
+                    </el-form-item>
+                    <el-form-item :label="$t('message.settings.stepPackWpfInGet')">
+                        <el-switch v-model="form.stepPackWpfInGet" :active-value="1" :inactive-value="0" />
+                        <span class="settings-tip">{{ $t('message.settings.stepPackWpfInGetTip') }}</span>
+                    </el-form-item>
+
                     <!-- 服务启停重试 -->
                     <el-divider content-position="left">{{ $t('message.settings.winServiceRetry') }}</el-divider>
                     <el-form-item :label="$t('message.settings.retryCount')">
@@ -243,6 +254,8 @@ let mcpPollToken = 0;
 const buildFormSnapshot = () =>
     JSON.stringify({
         oneClickPublishEnabled: form.oneClickPublishEnabled,
+        stepPackWpfInGet: form.stepPackWpfInGet,
+        stepShowOneClick: form.stepShowOneClick,
         winServiceRetryCount: form.winServiceRetryCount,
         winServiceRetryInterval: form.winServiceRetryInterval,
         winCopyRetryCount: form.winCopyRetryCount,

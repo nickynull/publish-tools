@@ -1,15 +1,15 @@
 {
-    "version": "1.5.0",
-    "notes": "<b>功能</b><br>• **「项目发布(STEP)」更多功能新增【创建生成DLL脚本】**：内置 TFS / Git 两套 bat 模板，对话框内填写**代码根目录**（可选目录）、**解决方案文件**（可选 `.sln`，脚本只取文件名）、**生成模式**（Release / Debug）、**平台**（Any CPU / x86 / x64），一键生成「探测 Visual Studio 环境 → `tf get` / `git pull` 获取最新代码 → MSBuild 生成解决方案」的脚本，并由系统保存对话框落盘，默认文件名如 `TFS生成Release环境dll.bat`<br>• 脚本模板独立成文件（`src/views/publishStep/templates/tfs-dll.bat`、`git-dll.bat`），与团队现用脚本逐行一致，只有两处路径值为占位标记；日后换脚本直接替换这两个文件即可，无需改代码<br>• **STEP 发布信息卡「发布环境」下方新增【生成DLL脚本】一行**：展示当前关联的 dll 生成脚本路径（点击打开脚本所在目录），支持【选择】本机 `.bat / .cmd`、【执行】、清除关联<br>• 脚本路径按 **项目 + 环境** 关联并记忆在本机（localStorage，键 `publish_step_dll_script_{项目ID}_{环境}`），切换项目/环境自动切换显示；新建脚本保存成功后若当前「项目 + 环境」尚未关联脚本，自动关联上（已关联其它脚本时不覆盖）<br>• 【执行】在该脚本的目录下用**独立命令行窗口**运行（Rust 新增命令 `run_local_script`），生成进度在窗口中直接查看，与双击 bat 行为一致；脚本不存在或非 `.bat / .cmd` 时给出明确提示<br><b>优化</b><br>• 脚本变量替换做双重兜底：先替换 `{{PROJECT_PATH}}` / `{{PROJECT_SOLUTION}}` 标记，再按 `set <变量>=` 行覆盖 4 个变量，兼容 `set p=\"v\"` 与 `set \"p=v\"` 两种写法——直接把一份不带标记的原始脚本覆盖到模板目录也能正常生成；输出统一 UTF-8 无 BOM + CRLF，中文注释不乱码<br>• 路径选择做了规范化：目录/文件选择器返回的正斜杠统一转 Windows 反斜杠并去掉尾部分隔符，避免 `set projectPath=\"D:\\x\\\"` 这类尾反斜杠转义问题；只选 `.sln` 时自动用其上级目录填充代码根目录<br>• 「功能说明」帮助文档与 README 同步补充上述两项功能；README 顺带补齐此前遗漏的说明（STEP 总体日志与行数上限、设置页「文件夹识别路径」、文件管理默认不勾选管理路径、服务器日志页签顺序、SSH 安装说明入口）<br><b>注：版本 ≤ 0.0.28 <a style='color:green' target='_blank' href='https://github.com/nickynull/publish-tools/releases/download/v1.5.0/SmomPublish_1.5.0_x64-setup.exe'>点击此处</a> 下载。</b>",
-    "pub_date": "2026-10-29T05:50:03Z",
+    "version": "1.5.1",
+    "notes": "<b>优化</b><br>• **创建生成DLL脚本默认保存文件名按当前界面「项目 + 环境」命名**：由 `TFS生成Release环境dll.bat` 优化为 `TFS生成{项目名}-{环境名}-{生成模式}环境dll.bat`（如 `TFS生成SMOM.V10.3-Pro-Release环境dll.bat`），项目名/环境名取发布页当前选择，缺省时自动跳过对应片段、两者都缺省沿用原命名；项目名中的 Windows 非法字符自动清洗为 `-`，避免生成非法文件名<br><b>注：版本 ≤ 0.0.28 <a style='color:green' target='_blank' href='https://github.com/nickynull/publish-tools/releases/download/v1.5.1/SmomPublish_1.5.1_x64-setup.exe'>点击此处</a> 下载。</b>",
+    "pub_date": "2026-10-29T06:41:54Z",
     "platforms": {
         "windows-x86_64": {
-            "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRRDNCN252RmdQejgxcU84M2thajdjb0VwWStwYzBzUS9McUMraWFQYlZUME9pZVQzN2REME5iM2JvT3prcnd0NndGZmtGVjkrcDg5SnZPODVvbjBOZGM3azRBcTBDNGc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjUyOTc3CWZpbGU6U21vbVB1Ymxpc2hfMS41LjBfeDY0LXNldHVwLmV4ZQpBSVFoblE3eXNRR05sVG9JWmRTWFZSWmt0aWhTSjJQTjQvdkVPS01tUXhHem5kR3ZyUlZyYkxhYWF2aDAvNDVQa2ZBbzEza1ZpZkRMMjVVYmM5UjZEQT09Cg==",
-            "url": "https://github.com/nickynull/publish-tools/releases/download/v1.5.0/SmomPublish_1.5.0_x64-setup.exe"
+            "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRRDNCN252RmdQejltdHFUd1hDVll1bTVPUWhHYkZqdDAwTXZCYmk0blFhTk1LcWNjWDIzWkVDMHBRWlpOOE5iR3FtQUxqeDBhMXBCendnaVlDOXMrQnlBdmlxdDlWS3djPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjU2MDg1CWZpbGU6U21vbVB1Ymxpc2hfMS41LjFfeDY0LXNldHVwLmV4ZQp0TVZhWjVHY0s4b0VrZ2FoUjM2M29xWGN5cEFMUE11QzhWUmNNYm1DS2dRZTlyeGFMOUlQRzN6K2YvTDlxUnJjRks1YlB5MUdubVplN1Bid2lXMkJBdz09Cg==",
+            "url": "https://github.com/nickynull/publish-tools/releases/download/v1.5.1/SmomPublish_1.5.1_x64-setup.exe"
         },
         "windows-msi": {
-            "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRRDNCN252RmdQejBaUkFCTnllYkRnQ2RiR0p1bWtqWHdtTHdqMTNCWnk1MHJBRDBib0hYb3Z6R0JTOEJBc0x6T1A2WjdrRHZIaXQvRWR1dVdQS1JkMkZ0M0xXdjNMTHdrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjUyOTc3CWZpbGU6U21vbVB1Ymxpc2hfMS41LjBfeDY0X3poLUNOLm1zaQpHdWU0bjJwTGNuZ1JJU2F1amdjamxXR1p2Zk4rNXpSQ3BTV1J1OS9leStSa251QWdZaS94azVhZXBuaTc2cnZIZG9XaXlIeFBTdGJ5dkJYU1EvNzFCZz09Cg==",
-            "url": "https://github.com/nickynull/publish-tools/releases/download/v1.5.0/SmomPublish_1.5.0_x64_zh-CN.msi"
+            "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRRDNCN252RmdQejEyKzQ0SEJDTlh4Q2szUmx5WlZQZmNjR0xRcEFTUUpyZ1Z1MzFpdkZPcDIwMm4wb0tkV3Z6eHIvTGNVdFppV3VMN0FsVnZHR29JK1hrdjM3STBHcndNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjU2MDg1CWZpbGU6U21vbVB1Ymxpc2hfMS41LjFfeDY0X3poLUNOLm1zaQpzbFgza3QvaWpXS2FqV1NzRW9UZnpFZjUwZHQ0YXV2TXFrUlFkZTZRZ0ZzUmt2cUErOVgwUmdtR21ZWk80WEJad2NnUndhd1JQMXFsQkQveGV1VnJEdz09Cg==",
+            "url": "https://github.com/nickynull/publish-tools/releases/download/v1.5.1/SmomPublish_1.5.1_x64_zh-CN.msi"
         }
     }
 }

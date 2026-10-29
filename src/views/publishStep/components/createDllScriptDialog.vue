@@ -58,7 +58,8 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { cmdInvoke } from "@/utils/command";
 import { buildDllScriptContent, buildDllScriptFileName, type DllScriptType } from "./dllScriptTemplates";
 
-const props = defineProps<{ modelValue: boolean }>();
+// 项目名/环境名由外层页面透传，用于生成默认保存文件名（如：TFS生成SMOM.V10.3-Pro-Release环境dll.bat）
+const props = defineProps<{ modelValue: boolean; projectName?: string; environmentName?: string }>();
 const emit = defineEmits(["update:modelValue", "saved"]);
 const visible = computed({
     get: () => props.modelValue,
@@ -91,7 +92,7 @@ watch(visible, (val) => {
     }
 });
 
-// 生成脚本内容后，预填保存对话框的默认文件名（如：TFS生成Release环境dll.bat）
+// 生成脚本内容后，预填保存对话框的默认文件名（按当前界面 项目 + 环境 + 生成模式 命名）
 const defaultFileName = computed(() =>
     buildDllScriptFileName({
         type: form.type,
@@ -99,6 +100,8 @@ const defaultFileName = computed(() =>
         projectSolution: form.projectSolution,
         buildConfiguration: form.buildConfiguration,
         buildPlatform: form.buildPlatform,
+        projectName: props.projectName,
+        environmentName: props.environmentName,
     })
 );
 

@@ -503,7 +503,8 @@
         <help-dialog ref="helpDialogRef" />
 
         <!-- 创建生成DLL脚本对话框 -->
-        <create-dll-script-dialog v-model="createDllScriptVisible" @saved="onDllScriptSaved" />
+        <create-dll-script-dialog v-model="createDllScriptVisible" :project-name="state.publishData.projectName"
+            :environment-name="displayEnvironment(state.publishData.environment)" @saved="onDllScriptSaved" />
     </div>
 </template>
 

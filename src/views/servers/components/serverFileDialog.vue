@@ -45,6 +45,7 @@
                                 <template v-if="loadedPath">
                                     路径：{{ loadedPath }}（共 {{ dirEntries.length }} 项<template v-if="searchTokens.length > 0">，匹配 {{ filteredDirEntries.length }} 项</template>）
                                 </template>
+                                <template v-else-if="selectedPaths.length > 1">已勾选 {{ selectedPaths.length }} 个管理路径，仅勾选 1 个时可查看文件</template>
                                 <template v-else>请勾选 1 个管理路径后点击「查看文件」</template>
                             </span>
                             <span v-if="loadedPath && selectedPaths.length === 1 && selectedPaths[0] !== loadedPath"
@@ -410,29 +411,68 @@ const setFileCancel = async (cancel: boolean) => {
 // 处理方式改动即记忆（全局偏好，下次打开弹窗沿用）；与具体服务器无关
 watch(conflictMode, (mode) => Local.set(CONFLICT_MODE_KEY, mode));
 
+/**
+ * 硬复位上一轮会话的全部运行态。
+ * 弹窗组件长期挂载（关闭只是 visible=false），ref 状态、表格内部 reserve-selection、
+ * file-progress 监听与在途请求都会存活到下一次打开，必须在打开时显式清掉。
+ */
+const resetSession = () => {
+    // 1) 先解绑上一次可能残留的进度监听，避免旧监听在新会话里重复处理事件
+    unlistenProgress?.();
+    unlistenProgress = null;
+    // 2) 序号自增：让所有在途 loadDir 的结果（含其 finally 里的状态复位）被判为过期并丢弃，
+    //    否则上一台服务器的目录结果会写进本次会话（显示旧路径、后续下载/删除跨服务器误操作）
+    loadSeq.value += 1;
+    // 3) 清表格内部 reserve-selection 的历史选中（row-key=path，不清会在重读时被自动重新勾选）
+    clearDirSelection();
+    // 4) 进行中标志：正常关闭有 busy 拦截，这里兜底异常路径残留（一打开就 busy、按钮全灰）
+    uploading.value = false;
+    deleting.value = false;
+    downloading.value = false;
+    loadingDir.value = false;
+    terminating.value = false;
+    activeTaskIndex.value = -1;
+    // 5) 业务数据
+    tasks.value = [];
+    dirEntries.value = [];
+    loadedPath.value = "";
+    searchKeyword.value = "";
+    selectedPaths.value = [];
+    resetDownloadState();
+    // 6) 每次打开都回到首个页签「浏览文件」（上一次会话可能停在其它页签）
+    activeTab.value = "browse";
+    // 7) 操作日志仅内存、不持久化：每次打开清空，重新记录本次会话
+    onRemoveLogs();
+    // 8) 复位后端文件操作取消标记（上一轮关闭/终止可能置位），避免首次读取即被拦截
+    setFileCancel(false).catch(() => undefined);
+};
+
+/**
+ * 管理路径末级目录名是否为 Templates（大小写不敏感，兼容 Win/Linux 分隔符与结尾斜杠）。
+ * 只认末级名称，不做子串匹配，避免 Templates2 / TemplatesBak 之类被误判。
+ */
+const isTemplatesPath = (path: string) => {
+    const trimmed = String(path ?? "").replace(/[\\/]+$/, "");
+    const name = trimmed.split(/[\\/]/).pop() ?? "";
+    return name.toLowerCase() === "templates";
+};
+
 // 打开弹窗
 const openDialog = (row: RowServerType) => {
     server.value = row;
     uploadPaths.value = Array.isArray(row.uploadPaths) ? row.uploadPaths.filter((path) => !!path) : [];
-    // 默认不勾选任何管理路径；查看文件时需先勾选一个
-    selectedPaths.value = [];
+    // 「存在文件」处理方式是全局偏好（跨服务器记忆，用户显式选择），不随会话复位
     conflictMode.value = readConflictMode();
-    tasks.value = [];
-    activeTaskIndex.value = -1;
-    dirEntries.value = [];
-    dirSelected.value = [];
-    loadedPath.value = "";
-    searchKeyword.value = "";
-    // 复位读取/终止状态，避免上一轮会话的残留状态带入本次打开
-    loadingDir.value = false;
-    terminating.value = false;
-    resetDownloadState();
-    // 每次打开都回到首个页签「浏览文件」（上一次会话可能停在其它页签）
-    activeTab.value = "browse";
-    // 操作日志不持久化：每次打开清空，重新记录本次会话
-    onRemoveLogs();
+    // 清除上一轮会话的全部历史数据（列表/勾选/上传记录/日志/在途请求/监听）
+    resetSession();
+    // 默认勾选所有 Templates 文件夹路径（一次上传到各服务端 Templates 的常见用法）；
+    // 勾选超过 1 个时【查看文件】按既有规则置灰，留一个即可浏览
+    selectedPaths.value = uploadPaths.value.filter(isTemplatesPath);
     printInfoLog(`打开文件管理：${row.name}（${row.ip}:${row.port}）`);
     printInfoLog(`管理路径 ${uploadPaths.value.length} 个：${uploadPaths.value.join("、") || "（未配置）"}`);
+    if (selectedPaths.value.length > 0) {
+        printInfoLog(`默认勾选 Templates 路径 ${selectedPaths.value.length} 个：${selectedPaths.value.join("、")}`);
+    }
     visible.value = true;
 };
 

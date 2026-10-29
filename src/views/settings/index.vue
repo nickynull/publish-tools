@@ -146,6 +146,35 @@
                     <el-button type="primary" :loading="prefixAdding" @click="onAddPrefix">新增</el-button>
                 </div>
             </el-card>
+
+            <!-- 文件夹识别路径管理（服务器弹窗「识别文件夹」在各服务发布路径下探测的子目录） -->
+            <el-card shadow="never" v-loading="detectRuleLoading" style="margin-top: 15px">
+                <template #header>
+                    <span>文件夹识别路径</span>
+                    <span class="settings-tip" style="margin-left: 8px">「识别文件夹」在各服务发布路径下探测的子目录，识别不到自动跳过</span>
+                </template>
+                <div class="prefix-tags" style="margin-bottom: 16px">
+                    <div v-for="item in detectRuleList" :key="item.id ?? item.subPath" class="prefix-tag-row">
+                        <el-tag :type="item.isDefault === 1 ? 'info' : undefined" :closable="item.isDefault !== 1"
+                            size="default" @close="onDeleteDetectRule(item)">
+                            {{ item.subPath }}
+                            <span v-if="item.isDefault === 1"
+                                style="margin-left: 4px; font-size: 11px; opacity: 0.7">(默认)</span>
+                        </el-tag>
+                        <el-switch v-model="item.enabled" :active-value="1" :inactive-value="0" size="small"
+                            style="margin-left: 8px" @change="onToggleDetectRule(item)" />
+                        <span class="settings-tip" style="margin-left: 6px">{{ item.enabled === 1 ? '启用' : '禁用'
+                            }}</span>
+                    </div>
+                    <el-empty v-if="!detectRuleList.length && !detectRuleLoading" description="暂无识别路径 — 试试输入如 logs 后点击新增"
+                        :image-size="56" />
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px">
+                    <el-input v-model="newDetectRule" placeholder="新增识别路径，如 logs" clearable style="width: 260px"
+                        @keyup.enter="onAddDetectRule" />
+                    <el-button type="primary" :loading="detectRuleAdding" @click="onAddDetectRule">新增</el-button>
+                </div>
+            </el-card>
         </div>
 
         <!-- 底部按钮栏：保存 / 取消保存 -->
@@ -165,6 +194,7 @@ import { reactive, ref, onMounted, onUnmounted, computed } from "vue";
 import { ElMessage, ElMessageBox, type FormInstance } from "element-plus";
 import { useSettingsDb } from "@/database/settings/index";
 import { useDiscoveryPrefixDb } from "@/database/discoveryPrefix/index";
+import { useFolderDetectRuleDb } from "@/database/folderDetectRule/index";
 import { defaultSettings, parsePublishModuleOrder, DEFAULT_PUBLISH_MODULE_ORDER } from "@/utils/publishSettings";
 import { cmdInvoke } from "@/utils/command";
 import mittBus from "@/utils/mitt";
@@ -324,10 +354,98 @@ const onDeletePrefix = async (row: DiscoveryPrefix) => {
     }
 };
 
+// 文件夹识别路径管理（与发现前缀同模式：tag + 启用开关 + 新增/删除，默认项不可删）
+const folderDetectRuleDb = useFolderDetectRuleDb();
+const detectRuleList = ref<FolderDetectRule[]>([]);
+const newDetectRule = ref("");
+const detectRuleLoading = ref(false);
+const detectRuleAdding = ref(false);
+
+const loadDetectRules = async () => {
+    detectRuleLoading.value = true;
+    try {
+        await folderDetectRuleDb.seedDefaults();
+        const r = await folderDetectRuleDb.getRules();
+        if (r.code === 0 && r.data) detectRuleList.value = r.data as FolderDetectRule[];
+    } catch (e) {
+        console.warn("加载文件夹识别路径失败:", e);
+    } finally {
+        detectRuleLoading.value = false;
+    }
+};
+
+const onAddDetectRule = async () => {
+    const val = newDetectRule.value.trim();
+    if (!val) {
+        ElMessage.warning("请输入识别路径");
+        return;
+    }
+    if (detectRuleList.value.some((p) => p.subPath === val)) {
+        ElMessage.warning("该识别路径已存在");
+        return;
+    }
+    detectRuleAdding.value = true;
+    try {
+        const r = await folderDetectRuleDb.upsertRule({ id: null, subPath: val, enabled: 1, isDefault: 0 });
+        if (r.code === 0) {
+            ElMessage.success("新增识别路径成功");
+            newDetectRule.value = "";
+            await loadDetectRules();
+        } else {
+            ElMessage.error(r.msg || "新增识别路径失败");
+        }
+    } catch (e: any) {
+        ElMessage.error("新增识别路径失败: " + (e?.message || e));
+    } finally {
+        detectRuleAdding.value = false;
+    }
+};
+
+const onToggleDetectRule = async (row: FolderDetectRule) => {
+    try {
+        const r = await folderDetectRuleDb.upsertRule(row);
+        if (r.code !== 0) {
+            ElMessage.error(r.msg || "更新失败");
+            await loadDetectRules();
+        }
+    } catch (e: any) {
+        ElMessage.error("更新失败: " + (e?.message || e));
+        await loadDetectRules();
+    }
+};
+
+const onDeleteDetectRule = async (row: FolderDetectRule) => {
+    if (row.isDefault === 1) {
+        ElMessage.warning("默认识别路径不可删除，可禁用");
+        return;
+    }
+    try {
+        await ElMessageBox.confirm(`确认删除识别路径 “${row.subPath}”？`, "提示", {
+            confirmButtonText: "确认",
+            cancelButtonText: "取消",
+            type: "warning",
+        });
+    } catch {
+        return;
+    }
+    try {
+        const r = await folderDetectRuleDb.deleteRule(row.id as number);
+        if (r.code === 0) {
+            ElMessage.success("删除成功");
+            await loadDetectRules();
+        } else {
+            ElMessage.error(r.msg || "删除失败");
+        }
+    } catch (e: any) {
+        ElMessage.error("删除失败: " + (e?.message || e));
+    }
+};
+
 // 监听 MCP 状态事件
 onMounted(async () => {
     load();
     loadPrefixes();
+    loadDetectRules();
     try {
         unlisten = await listen<{ status: string; message?: string; port?: number }>("mcp-status", (event) => {
             mcpStatus.value = event.payload.status;

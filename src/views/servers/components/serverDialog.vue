@@ -136,7 +136,7 @@
                                         @click="onDetectFolders">
                                         识别文件夹
                                     </el-button>
-                                    <span class="upload-path-tip">识别各服务路径下的 logs 目录，及 WebClient 路径下的 wwwroot/Templates</span>
+                                    <span class="upload-path-tip">识别各服务发布路径下配置的子目录（在设置页维护）</span>
                                 </div>
                             </div>
                         </el-form-item>
@@ -157,10 +157,11 @@
 <script setup lang="ts" name="serverDialog">
 import { computed, nextTick, reactive, ref } from "vue";
 import type { FormInstance, FormRules } from "element-plus";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessage } from "element-plus";
 import _ from "lodash";
 import { useServerDb } from "@/database/servers/index";
 import { useProjectDb } from "@/database/project/index";
+import { useFolderDetectRuleDb } from "@/database/folderDetectRule/index";
 import { useServiceDiscovery } from "@/composables/useServiceDiscovery";
 import { cmdInvoke } from "@/utils/command";
 import { buildRemoteDirExistsCommand, joinRemotePath } from "@/utils/remoteFs";
@@ -314,7 +315,8 @@ const onDiscoverServices = async () => {
 const uploadPathKey = (path: string) =>
     String(path ?? "").trim().replace(/[\\/]+$/, "").toLowerCase();
 
-// 识别文件夹：各非 WPF 服务路径下的 logs、WebClient 路径下的 wwwroot/Templates，存在则加入文件管理路径
+// 识别文件夹：按设置页配置的识别子路径，在各服务发布路径下探测，存在则加入文件管理路径
+// 提示口径与「识别服务」一致：识别不到的目录静默跳过，不做明细提示
 const detectingFolders = ref(false);
 
 /** 远端目录存在性探测（必定 exit 0 的命令，输出 1/0） */
@@ -343,28 +345,24 @@ const onDetectFolders = async () => {
         ElMessage.warning("未配置服务路径，请先点击「识别服务」或手动填写发布路径！");
         return;
     }
-
-    // 模板目录候选：仅 WebClient（先按服务类型精确匹配，匹配不到再按服务标识/路径文本回退，与识别服务的类型推断口径一致）
-    let templateBases = groups
-        .filter((group) => group.serviceType === "WebClient")
-        .map((group) => String(group.path).trim());
-    if (templateBases.length === 0) {
-        templateBases = groups
-            .filter((group) => `${group.identity ?? ""} ${group.path ?? ""}`.toLowerCase().includes("webclient"))
-            .map((group) => String(group.path).trim());
+    // 识别子路径来自设置页配置（与「服务发现前缀」同模式）
+    const folderDetectRuleDb = useFolderDetectRuleDb();
+    await folderDetectRuleDb.seedDefaults();
+    const ruleResult = await folderDetectRuleDb.getRules();
+    if (ruleResult.code !== 0) {
+        ElMessage.error(ruleResult.msg);
+        return;
+    }
+    const subPaths = (ruleResult.data || [])
+        .filter((rule) => rule.enabled === 1)
+        .map((rule) => String(rule.subPath ?? "").trim())
+        .filter(Boolean);
+    if (subPaths.length === 0) {
+        ElMessage.info("未配置识别路径，可在设置页的「文件夹识别路径」中配置后重试");
+        return;
     }
 
-    // 日志目录候选：除 WPF 以外的所有服务路径（WPF 为客户端，服务器上无日志目录；未选服务类型时按文本含 wpf 兜底排除）
-    const isWpfGroup = (group: ServerDefaultPathType) => {
-        if (group.serviceType === "WpfClient") return true;
-        if ((group.serviceType ?? "") !== "") return false;
-        return `${group.identity ?? ""} ${group.path ?? ""}`.toLowerCase().includes("wpf");
-    };
-    const logBases = groups
-        .filter((group) => !isWpfGroup(group))
-        .map((group) => String(group.path).trim());
-
-    // 基路径去重（同一路径可能被多个服务类型复用），避免重复探测
+    // 候选目录 = 每个服务发布路径 × 每个识别子路径（基路径去重，避免重复探测）
     const uniqueByPathKey = (paths: string[]) => {
         const keys = new Set<string>();
         return paths.filter((path) => {
@@ -374,35 +372,18 @@ const onDetectFolders = async () => {
             return true;
         });
     };
-    const templateBaseList = uniqueByPathKey(templateBases);
-    const logBaseList = uniqueByPathKey(logBases);
-
-    if (templateBaseList.length === 0 && logBaseList.length === 0) {
-        ElMessage.warning("未找到可识别的服务路径（logs 目录需非 WPF 服务，模板目录需 WebClient 服务）！");
-        return;
-    }
+    const baseList = uniqueByPathKey(groups.map((group) => String(group.path).trim()));
+    const candidates = uniqueByPathKey(
+        baseList.flatMap((base) => subPaths.map((subPath) => joinRemotePath(base, subPath)))
+    );
 
     detectingFolders.value = true;
     const found: string[] = [];
-    const missing: string[] = [];
-    const failed: string[] = [];
     try {
-        // 1. 模板目录：WebClient 基路径下的 wwwroot/Templates
-        for (const base of templateBaseList) {
-            const templatePath = joinRemotePath(base, "wwwroot", "Templates");
-            const templateState = await probeRemoteDir(templatePath);
-            if (templateState === "exists") found.push(templatePath);
-            else if (templateState === "missing") missing.push(templatePath);
-            else failed.push(templatePath);
-        }
-
-        // 2. 日志目录：各非 WPF 服务路径下的 <base>/logs（只认根目录）
-        for (const base of logBaseList) {
-            const logPath = joinRemotePath(base, "logs");
-            const logState = await probeRemoteDir(logPath);
-            if (logState === "exists") found.push(logPath);
-            else if (logState === "missing") missing.push(logPath);
-            else failed.push(logPath);
+        for (const candidate of candidates) {
+            // 识别不到（missing）或探测失败（failed）一律静默跳过，与「识别服务」处理模式一致
+            const dirState = await probeRemoteDir(candidate);
+            if (dirState === "exists") found.push(candidate);
         }
 
         // 清掉空输入行后追加（去重、上限 10）
@@ -418,21 +399,10 @@ const onDetectFolders = async () => {
             added++;
         }
 
-        const summary = `识别 ${found.length + missing.length + failed.length} 个目录：新增 ${added} 个` +
-            (missing.length > 0 ? `，不存在 ${missing.length} 个` : "") +
-            (failed.length > 0 ? `，探测失败 ${failed.length} 个` : "");
-        if (added > 0) ElMessage.success(`${summary}，请确认后保存`);
-        else ElMessage.warning(summary);
-
-        if (missing.length > 0 || failed.length > 0) {
-            const lines = [
-                ...missing.map((path) => `不存在：${path}`),
-                ...failed.map((path) => `探测失败：${path}`),
-            ];
-            ElMessageBox.alert(lines.join("<br/>"), "文件夹识别明细", {
-                confirmButtonText: "知道了",
-                dangerouslyUseHTMLString: true,
-            });
+        if (found.length > 0) {
+            ElMessage.success(`识别到 ${found.length} 个文件夹：新增 ${added} 个，请确认后保存`);
+        } else {
+            ElMessage.info("未识别到匹配的文件夹，可在设置中调整文件夹识别路径后重试");
         }
     } catch (e: any) {
         ElMessage.error("识别文件夹出错：" + (e?.message ?? String(e)));

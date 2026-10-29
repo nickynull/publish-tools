@@ -81,6 +81,22 @@
                                     <el-radio border :value="4">Other</el-radio>
                                 </el-radio-group>
                             </div>
+                            <!-- 生成DLL脚本：路径按「项目 + 环境」关联，保存在本机（localStorage） -->
+                            <div class="project-select-row project-dll-script-row">
+                                <div class="project-select-label">生成DLL脚本</div>
+                                <div class="dll-script-box">
+                                    <a v-if="dllScriptPath" class="t-link-path dll-script-path"
+                                        href="javascript:void(0);" :title="`打开脚本所在目录：${dllScriptPath}`"
+                                        @click="onOpenDllScriptDir">{{ dllScriptPath }}</a>
+                                    <span v-else class="dll-script-empty">未关联（点【选择】指定 bat 脚本，按 项目 + 环境 记忆）</span>
+                                    <el-button size="small" :icon="FolderOpened" :disabled="isAnyLoading"
+                                        title="选择生成DLL脚本（.bat / .cmd）" @click="onSelectDllScript">选择</el-button>
+                                    <el-button size="small" type="primary" :icon="VideoPlay" :disabled="!dllScriptPath || isAnyLoading"
+                                        title="在新的命令行窗口中执行该脚本" @click="onRunDllScript">执行</el-button>
+                                    <el-button v-if="dllScriptPath" size="small" type="info" :icon="Delete" text
+                                        title="清除当前 项目 + 环境 的脚本关联" @click="onClearDllScript" />
+                                </div>
+                            </div>
                         </div>
 
                         <div class="card-item-appconfig">
@@ -485,6 +501,9 @@
 
         <!-- 功能说明对话框 -->
         <help-dialog ref="helpDialogRef" />
+
+        <!-- 创建生成DLL脚本对话框 -->
+        <create-dll-script-dialog v-model="createDllScriptVisible" @saved="onDllScriptSaved" />
     </div>
 </template>
 
@@ -493,14 +512,27 @@ import {
     reactive,
     ref,
     computed,
+    watch,
     onBeforeMount,
     onBeforeUnmount,
     defineAsyncComponent,
 } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Refresh, CircleClose, EditPen, VideoPause, QuestionFilled, CaretBottom, CloseBold } from "@element-plus/icons-vue";
+import {
+    Refresh,
+    CircleClose,
+    EditPen,
+    VideoPause,
+    VideoPlay,
+    QuestionFilled,
+    CaretBottom,
+    CloseBold,
+    FolderOpened,
+    Delete,
+} from "@element-plus/icons-vue";
 import { cmdInvoke } from "@/utils/command";
 import { path } from "@tauri-apps/api";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useProjectDb } from "@/database/project/index";
 import { useAppconfigDb } from "@/database/appconfig/index";
 import {
@@ -568,6 +600,9 @@ const HelpDialog = defineAsyncComponent(
 );
 const RestoreBackupDialog = defineAsyncComponent(
     () => import("./components/restoreBackupDialog.vue")
+);
+const CreateDllScriptDialog = defineAsyncComponent(
+    () => import("./components/createDllScriptDialog.vue")
 );
 
 // 查看功能说明
@@ -727,6 +762,15 @@ const state = reactive({
             loading: false,
             loadingText: "查询中",
         },
+        {
+            title: "创建生成DLL脚本",
+            desc: "选择 TFS/Git 模板并填入代码根目录、解决方案等变量，生成 DLL 生成脚本并保存到本机",
+            iconBgColor: "--next-color-primary-lighter",
+            iconFont: "smom-icon smom-icon-chengxuji",
+            iconColor: "--el-color-primary",
+            loading: false,
+            loadingText: "生成中",
+        },
     ],
     // 项目发布信息
     publishData: {
@@ -744,7 +788,7 @@ const currModuleIndex = ref(0);
 
 // ==================== 更多功能下拉菜单 ====================
 // 收纳进「更多功能」菜单的功能标题（顶部不再平铺展示）
-const moreMenuTitles = ["备份", "备份管理", "服务管理", "查看服务端程序集", "查看本机程序集"];
+const moreMenuTitles = ["备份", "备份管理", "服务管理", "查看服务端程序集", "查看本机程序集", "创建生成DLL脚本"];
 // 顶部平铺卡片：排除收纳进菜单的功能
 const mainFunModules = computed(() =>
     state.funModule
@@ -766,6 +810,9 @@ const moreMenuLoadingText = computed(
 const onMoreMenuCommand = (index: number) => {
     onFunModuleHandle(index);
 };
+
+// 创建DLL生成脚本对话框
+const createDllScriptVisible = ref(false);
 
 // STEP 业务组合式函数
 const stepPublishApi = useStepPublish(
@@ -892,6 +939,16 @@ const checkClientPathRecentFiles = async (opTitle: string): Promise<boolean> => 
 // 功能模块触发
 const onFunModuleHandle = async (index: number) => {
     const title = state.funModule[index].title;
+    // 创建生成DLL脚本：不依赖应用配置，直接打开对话框（不进入 loading/发布日志流程）
+    if (title === "创建生成DLL脚本") {
+        const currModule = state.funModule.find((item) => item.loading);
+        if (currModule) {
+            ElMessage.info(`正在[${currModule.title}]中，请稍等！`);
+            return;
+        }
+        createDllScriptVisible.value = true;
+        return;
+    }
     if (showEmptyAppConfig.value) {
         ElMessage.warning("未获取到要发布的应用配置信息！");
         return;
@@ -1651,6 +1708,120 @@ const saveRecentMinutesToStorage = () => {
     }
 };
 
+// ==================== 生成DLL脚本（按 项目 + 环境 关联，存本机 localStorage） ====================
+const DLL_SCRIPT_KEY_PREFIX = "publish_step_dll_script";
+const dllScriptPath = ref("");
+// 当前「项目 + 环境」对应的存储键（未选项目/环境时为空，不读不写）
+const dllScriptStorageKey = computed(() => {
+    const projectId = Number(state.publishData.projectId) || 0;
+    const environment = Number(state.publishData.environment) || 0;
+    return projectId > 0 && environment > 0
+        ? `${DLL_SCRIPT_KEY_PREFIX}_${projectId}_${environment}`
+        : "";
+});
+// 切换项目/环境时重新读取对应脚本路径
+watch(
+    dllScriptStorageKey,
+    (storageKey) => {
+        if (!storageKey) {
+            dllScriptPath.value = "";
+            return;
+        }
+        try {
+            dllScriptPath.value = localStorage.getItem(storageKey) || "";
+        } catch (error) {
+            console.error("恢复生成DLL脚本路径失败:", error);
+            dllScriptPath.value = "";
+        }
+    },
+    { immediate: true }
+);
+// 写入/清除当前「项目 + 环境」的脚本路径
+const saveDllScriptPathToStorage = (scriptPath: string) => {
+    const storageKey = dllScriptStorageKey.value;
+    if (!storageKey) return;
+    try {
+        if (scriptPath) localStorage.setItem(storageKey, scriptPath);
+        else localStorage.removeItem(storageKey);
+    } catch (error) {
+        console.error("保存生成DLL脚本路径失败:", error);
+    }
+};
+// 选择生成DLL脚本（只记路径，不改脚本内容）
+const onSelectDllScript = async () => {
+    if (!dllScriptStorageKey.value) {
+        ElMessage.warning("请先选择发布项目和发布环境");
+        return;
+    }
+    try {
+        const file = await open({
+            multiple: false,
+            title: "选择生成DLL脚本",
+            filters: [{ name: "批处理脚本", extensions: ["bat", "cmd"] }],
+        });
+        if (!file) return;
+        dllScriptPath.value = String(file).replace(/\//g, "\\");
+        saveDllScriptPathToStorage(dllScriptPath.value);
+        ElMessage.success(`已关联生成DLL脚本：${dllScriptPath.value}`);
+    } catch (error) {
+        console.error("打开脚本选择框失败:", error);
+        ElMessage.error("打开脚本选择框失败");
+    }
+};
+// 清除当前「项目 + 环境」的脚本关联
+const onClearDllScript = () => {
+    if (!dllScriptPath.value) return;
+    dllScriptPath.value = "";
+    saveDllScriptPathToStorage("");
+    ElMessage.success("已清除当前 项目 + 环境 的生成DLL脚本关联");
+};
+// 打开脚本所在目录
+const onOpenDllScriptDir = async () => {
+    if (!dllScriptPath.value) return;
+    const dir = dllScriptPath.value.replace(/[\\/][^\\/]*$/, "");
+    if (!dir) return;
+    await cmdInvoke("open_dir", { path: dir });
+};
+// 执行生成DLL脚本：脚本里带 pause 且 msbuild 耗时长，由后端在独立命令行窗口中运行（不捕获输出）
+const onRunDllScript = async () => {
+    if (!dllScriptPath.value) return;
+    try {
+        await ElMessageBox.confirm(
+            `脚本会先获取最新代码再用 MSBuild 生成 dll，耗时可能较长；执行过程显示在新打开的命令行窗口中，关闭该窗口即结束。<br/><br/>· 脚本：${dllScriptPath.value}<br/>· 项目：${state.publishData.projectName || "-"}（${displayEnvironment(
+                Number(state.publishData.environment)
+            )}）<br/><br/>是否开始执行？`,
+            "执行生成DLL脚本",
+            {
+                confirmButtonText: "开始执行",
+                cancelButtonText: "取消",
+                dangerouslyUseHTMLString: true,
+                type: "warning",
+            }
+        );
+    } catch {
+        return;
+    }
+    const result = await cmdInvoke<boolean>("run_local_script", { path: dllScriptPath.value });
+    if (result.code !== 0) {
+        ElMessage.error(`执行生成DLL脚本失败：${result.data}`);
+        return;
+    }
+    ElMessage.success("已在新的命令行窗口开始执行生成DLL脚本");
+};
+// 创建生成DLL脚本并保存后：当前 项目 + 环境 未关联脚本时自动关联（已关联则不覆盖）
+const onDllScriptSaved = (filePath: string) => {
+    if (!filePath || !dllScriptStorageKey.value) return;
+    if (dllScriptPath.value) {
+        if (dllScriptPath.value !== filePath) {
+            ElMessage.info("当前 项目 + 环境 已关联其它脚本，如需改用新脚本请点【选择】重新指定");
+        }
+        return;
+    }
+    dllScriptPath.value = filePath;
+    saveDllScriptPathToStorage(filePath);
+    ElMessage.success("已自动将该脚本关联为当前 项目 + 环境 的生成DLL脚本");
+};
+
 // 项目切换
 const onProjectChange = async (val: number) => {
     saveProjectIdToStorage(val);
@@ -2073,6 +2244,35 @@ $log-console-text: #ffffff;
                 :deep(.el-radio) {
                     margin-right: 0.5rem;
                     font-weight: 400;
+                }
+            }
+
+            // 生成DLL脚本：路径 + 选择/执行按钮同一行，路径过长省略
+            .project-dll-script-row {
+                .dll-script-box {
+                    flex: 1;
+                    display: flex;
+                    align-items: center;
+                    gap: 0.4rem;
+                    min-width: 0;
+                }
+
+                .dll-script-path {
+                    flex: 1;
+                    min-width: 0;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                }
+
+                .dll-script-empty {
+                    flex: 1;
+                    color: var(--el-text-color-secondary);
+                    font-size: 0.85rem;
+                }
+
+                :deep(.el-button + .el-button) {
+                    margin-left: 0;
                 }
             }
         }

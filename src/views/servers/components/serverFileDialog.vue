@@ -345,8 +345,8 @@ watch(conflictMode, (mode) => Local.set(CONFLICT_MODE_KEY, mode));
 const openDialog = (row: RowServerType) => {
     server.value = row;
     uploadPaths.value = Array.isArray(row.uploadPaths) ? row.uploadPaths.filter((path) => !!path) : [];
-    // 默认全选（单路径场景免勾选）；查看文件时再让用户收敛到一个
-    selectedPaths.value = [...uploadPaths.value];
+    // 默认不勾选任何管理路径；查看文件时需先勾选一个
+    selectedPaths.value = [];
     conflictMode.value = readConflictMode();
     tasks.value = [];
     activeTaskIndex.value = -1;

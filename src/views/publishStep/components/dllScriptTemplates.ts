@@ -25,6 +25,8 @@ export type DllScriptForm = {
     projectSolution: string;
     buildConfiguration: string; // Debug / Release
     buildPlatform: string; // Any CPU / x86 / x64
+    projectName?: string; // 界面当前发布项目（仅用于默认保存文件名）
+    environmentName?: string; // 界面当前发布环境名 Dev/Uat/Pro/Other（仅用于默认保存文件名）
 };
 
 // 脚本类型 → 模板原文（新增类型时在此登记，并在 ../templates 放一个同名 .bat）
@@ -88,6 +90,16 @@ export const buildDllScriptContent = (form: DllScriptForm): string => {
     return content.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n") + "\r\n";
 };
 
-/** 保存对话框默认文件名（沿用原脚本命名风格，[xx] 由用户自行调整） */
-export const buildDllScriptFileName = (form: DllScriptForm): string =>
-    `${form.type}生成${form.buildConfiguration}环境dll.bat`;
+/** 清洗文件名片段：替换 Windows 非法字符并去除首尾空白 */
+const sanitizeFileNamePart = (value: string): string =>
+    String(value || "").trim().replace(/[/\\:*?"<>|]/g, "-");
+
+/**
+ * 保存对话框默认文件名：按当前界面「项目 + 环境 + 生成模式」命名
+ * 如：TFS生成SMOM.V10.3-Pro-Release环境dll.bat；项目名/环境名缺省时自动跳过对应片段
+ */
+export const buildDllScriptFileName = (form: DllScriptForm): string => {
+    const parts = [sanitizeFileNamePart(form.projectName || ""), sanitizeFileNamePart(form.environmentName || "")].filter(Boolean);
+    const prefix = parts.length > 0 ? `${parts.join("-")}-` : "";
+    return `${form.type}生成${prefix}${form.buildConfiguration}环境dll.bat`;
+};

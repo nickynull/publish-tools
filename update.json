@@ -1,15 +1,15 @@
 {
-    "version": "1.5.3",
-    "notes": "<b>修复</b><br>• **修复服务器【文件管理】点击「查看文件」后界面卡死、弹窗按钮失灵**：勾选管理路径后直接点【查看文件】（未先逐个点过页签）几乎必现——内容区空白、页签栏错位，右上角 X 与底部【关闭】均无响应，只能强杀进程。表现为「浏览文件」页签首次挂载、目录数据写入与 `v-loading` 遮罩三件事挤在同一时序内完成，渲染中断后整棵组件树的 patch 失效；现把「浏览文件」提到页签第一位并设为默认页签，弹窗打开即完成该页签挂载，点【查看文件】时只剩数据刷新（此前先把页签点一遍即不复现，可佐证该时序判断）<br><b>优化</b><br>• **服务器【文件管理】界面重排**：「浏览文件」页签移至第一位并作为每次打开弹窗的默认页签（原默认停在「上传记录」）；「上传记录」页签更名为**「文件上传」**，【选择文件上传】按钮从弹窗底部移入该页签工具条，与【清空上传记录】（原「清空」）并列，上传中仍显示进度转圈；弹窗底部只保留【终止操作】与【关闭】两个全局动作。上传记录表格的空态文案同步改为「尚未选择文件，点右上“选择文件上传”」，按钮不可用时 hover 提示「请先在上方勾选管理路径」。<br><b>注：版本 ≤ 0.0.28 <a style='color:green' target='_blank' href='https://github.com/nickynull/publish-tools/releases/download/v1.5.3/SmomPublish_1.5.3_x64-setup.exe'>点击此处</a> 下载。</b>",
-    "pub_date": "2026-10-29T13:37:58Z",
+    "version": "1.5.4",
+    "notes": "<b>修复</b><br>• **服务器【文件管理】每次打开强制清除上一轮会话的历史数据**：弹窗组件长期挂载、关闭只是隐藏，目录列表与勾选、上传记录、操作日志、进行中标志、`file-progress` 监听以及在途的读取请求都会残留到下一次打开。此前残留会导致：① 读取 A 服务器途中关闭再打开 B，A 未返回的目录结果写进本次会话（界面显示 A 的路径与文件，而下载/删除实际发往 B，存在跨服务器误操作风险）；② 浏览表勾选列开了 `reserve-selection` 且 `row-key=\"path\"`，重开弹窗重读同一路径时上一次会话勾选过的文件被自动重新勾选，用户未选却显示「下载所选（N）」「删除所选（N）」并可点；③ 异常路径下 `busy` 或进度监听残留，表现为一打开就按钮全灰、无法关闭或进度跳动。现打开弹窗时统一做硬复位：解绑旧监听、自增读取序号丢弃在途结果、`clearSelection()` 清表格内部选中、复位上传/下载/删除/读取/终止标志、清空上传记录与操作日志、回到「浏览文件」页签，并复位后端文件操作取消标记。「存在文件」处理方式属全局偏好（用户显式选择并跨服务器记忆），不随会话复位。<br><b>优化</b><br>• **服务器【文件管理】打开时默认勾选所有 Templates 文件夹路径**：取管理路径的末级目录名与 `Templates` 大小写不敏感比较（兼容 Windows `\\` 与 Linux `/`、忽略结尾斜杠，`Templates2` / `TemplatesBak` 之类不误勾），打开弹窗即把这些路径勾上，省掉每次手点——上传按「文件 × 已勾选路径」批量建任务，常见用法正是一次把模板/静态资源发到各服务端的 `Templates`。勾选多于 1 个时【查看文件】仍按既有规则置灰（浏览只支持单个路径），此时浏览区提示改为「已勾选 N 个管理路径，仅勾选 1 个时可查看文件」；无 Templates 路径时与原来一致（全部不勾选），操作日志会记录本次默认勾选的数量与路径<br><b>注：版本 ≤ 0.0.28 <a style='color:green' target='_blank' href='https://github.com/nickynull/publish-tools/releases/download/v1.5.4/SmomPublish_1.5.4_x64-setup.exe'>点击此处</a> 下载。</b>",
+    "pub_date": "2026-10-29T14:04:57Z",
     "platforms": {
         "windows-x86_64": {
-            "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRRDNCN252RmdQejVZSzRITmEvOXRZZU5DZHBJLy9qNDRXRFFnamV1L09adlRLcXJKYjlBTWRuSmhPU1F0QkIrQlU1QWZWWWo1RVVvOWVjWWlCaldCWkhGeXRmaHpRNVFVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjgxMDUxCWZpbGU6U21vbVB1Ymxpc2hfMS41LjNfeDY0LXNldHVwLmV4ZQo5ZW5rSFdEbDdXZEpZN1BHRlVWRVpseFdmSkdDR2RNaEFXSDBPV3lOcGpEdFpydERHZDNNMHNxbXJoUDNTdVBmSW1laGgvSFRWZFVGUHBIeG5uZ1ZCUT09Cg==",
-            "url": "https://github.com/nickynull/publish-tools/releases/download/v1.5.3/SmomPublish_1.5.3_x64-setup.exe"
+            "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRRDNCN252RmdQejVndmN2Wmg0a2FrRURtUWhuODZKYnZKVEZXOUpLU0RCUEZkQzkrWjVTdkxEajFTRzlkN2lmd3JqTmFOWXBET2NRTXAzdGZxSEFjcEpBV1JBeGFkd1FNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjgyNjcwCWZpbGU6U21vbVB1Ymxpc2hfMS41LjRfeDY0LXNldHVwLmV4ZQpuelFIVE1hQ2RuMDJHWG1VZ1d0R0tpcVlBaGhTd0c4LzMzSGJ2RSthelA0ZXZrdDVGN0RYWFFDOW1MeVJEN1BFNnZUc2xoaVJCcTBrT2tvbE5RU2ZCUT09Cg==",
+            "url": "https://github.com/nickynull/publish-tools/releases/download/v1.5.4/SmomPublish_1.5.4_x64-setup.exe"
         },
         "windows-msi": {
-            "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRRDNCN252RmdQejhrQyttU0JVckhmR2RUTG9OMm1GUy9RNGl6Z09pcm54VjRhWUQrcG53ZFlQY2h6RjhiU3NUd3VSN1ZQVDlsaFJuNlM0bzJLYzNSVWZ5dVptaE5Jand3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjgxMDUxCWZpbGU6U21vbVB1Ymxpc2hfMS41LjNfeDY0X3poLUNOLm1zaQphejQ4VE1ZMW5kTFRvaGhvRVoydE9LVmxaTlJCYjE3eDJDREdxdnYwN3Budy90TG4wQjVWVWRCM1FpRjNJbEpPWitwOS9nU3lNd0VZdTgyN00vK3VBdz09Cg==",
-            "url": "https://github.com/nickynull/publish-tools/releases/download/v1.5.3/SmomPublish_1.5.3_x64_zh-CN.msi"
+            "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRRDNCN252RmdQejZrQ0RDTUtXbktnMkpEZ1g1R29YbjdEWUZhVG9aWktaWnNzVmtwZ1UwYk9hUUVIUXQ0eUE2amdHU25NQVhhSkZtaU1kTStreEJURmlGMkpZYlFJRWdJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjgyNjcwCWZpbGU6U21vbVB1Ymxpc2hfMS41LjRfeDY0X3poLUNOLm1zaQpTdVdqZ1FoeW13N01wMyt5cHlCWkVVa0VzWnJjVGU5L2FWNGFrMXI3MnRqUWc3NUh4b3Q3d3VpUXB1WVg4eVA1cUkzVXQrVHluMmpJTWlUSVFCSjVCUT09Cg==",
+            "url": "https://github.com/nickynull/publish-tools/releases/download/v1.5.4/SmomPublish_1.5.4_x64_zh-CN.msi"
         }
     }
 }

@@ -145,6 +145,7 @@ fn main() {
             file_module::execute_local_command,
             file_module::exec_local_command_spawn,
             file_module::execute_local_command_with_working_dir,
+            file_module::run_local_script,
             file_module::server_connection,
             file_module::un_zip,
             file_module::read_all_dlls,

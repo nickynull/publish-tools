@@ -17,9 +17,9 @@
                             </el-checkbox>
                         </div>
                         <div class="path-actions">
-                            <!-- 始终显示：未唯一勾选时置灰（title 说明原因） -->
-                            <el-button title="仅勾选一个管理路径时可查看文件" :disabled="busy || selectedPaths.length !== 1"
-                                @click="onViewFiles">
+                            <!-- 始终显示：未唯一勾选时置灰（title 说明原因）；读取目录中禁用，避免并发读取互相覆盖 -->
+                            <el-button title="仅勾选一个管理路径时可查看文件"
+                                :disabled="busy || loadingDir || selectedPaths.length !== 1" @click="onViewFiles">
                                 查看文件
                             </el-button>
                             <div class="path-bulk">
@@ -97,7 +97,7 @@
                             </el-input>
                             <div class="browse-actions">
                                 <el-button size="small"
-                                    :disabled="busy || (selectedPaths.length !== 1 && !loadedPath)"
+                                    :disabled="busy || loadingDir || (selectedPaths.length !== 1 && !loadedPath)"
                                     @click="onRefreshDir">刷新</el-button>
                                 <el-button size="small" type="primary" plain
                                     :disabled="busy || dirFileSelected.length === 0" @click="onDownloadSelected">
@@ -120,7 +120,9 @@
                             class="fill-table" row-key="path"
                             :empty-text="searchTokens.length > 0 ? '没有匹配的条目' : '该路径下没有文件或文件夹'"
                             @selection-change="onDirSelectionChange">
-                            <el-table-column type="selection" width="46" reserve-selection />
+                            <!-- 文件夹不可勾选（下载/删除只支持文件，删除文件夹易误删整棵子树） -->
+                            <el-table-column type="selection" width="46" reserve-selection
+                                :selectable="(row: RemoteDirEntry) => !row.isDir" />
                             <el-table-column label="名称" min-width="240" show-overflow-tooltip sortable
                                 :sort-method="sortByName">
                                 <template #default="{ row }">
@@ -147,13 +149,41 @@
                                         下载
                                     </el-button>
                                     <span v-else class="hint row-action-empty">—</span>
-                                    <el-button size="small" text type="danger" :disabled="busy"
+                                    <el-button v-if="!row.isDir" size="small" text type="danger" :disabled="busy"
                                         @click="onDeleteRow(row)">
                                         删除
                                     </el-button>
+                                    <span v-else class="hint row-action-empty">—</span>
                                 </template>
                             </el-table-column>
                         </el-table>
+                    </div>
+                </el-tab-pane>
+                <el-tab-pane label="操作日志" name="log">
+                    <div class="pane-fill log-pane">
+                        <div class="log-toolbar">
+                            <el-switch v-model="showLogLineNo" size="small" title="显示/隐藏日志行号"
+                                @change="onShowLogLineNoChange" />
+                            <span class="hint">行号</span>
+                            <span class="hint">行数限制</span>
+                            <el-input-number title="日志最多保留的行数（超出后自动清理最旧的行）" size="small"
+                                v-model="maxLogLines" :min="10" :max="100000" :step="100" :controls="false"
+                                style="width: 100px" @change="setMaxLogLines" />
+                            <span class="hint">行</span>
+                            <span class="hint log-count">共 {{ logPrintInfo.length }} 行</span>
+                            <el-button size="small" type="info" :icon="CircleClose" @click="onRemoveLogs">
+                                清空日志
+                            </el-button>
+                        </div>
+                        <div :ref="setLogContentRef" class="log-pane-content">
+                            <p v-for="(logLine, logIndex) in logPrintInfo" :class="logLine.type">
+                                <span v-if="showLogLineNo" class="log-line-no"
+                                    :style="{ minWidth: logLineNoWidth }">{{
+                                    logLine.id ?? logIndex + 1
+                                    }}</span>
+                                {{ logLine.content.value }}
+                            </p>
+                        </div>
                     </div>
                 </el-tab-pane>
             </el-tabs>
@@ -187,7 +217,8 @@ import {
 } from "@/utils/remoteFs";
 import { formatDate } from "@/utils/formatTime";
 import { Local } from "@/utils/storage";
-import { Search } from "@element-plus/icons-vue";
+import { useStepLog } from "@/composables/useStepLog";
+import { CircleClose, Search } from "@element-plus/icons-vue";
 
 /** 上传进度事件负载（与后端 utils/progress.rs 一致） */
 type FileProgressPayload = {
@@ -249,7 +280,7 @@ const server = ref<RowServerType | null>(null);
 const uploadPaths = ref<string[]>([]);
 const selectedPaths = ref<string[]>([]);
 const conflictMode = ref<ConflictMode>(readConflictMode());
-const activeTab = ref<"upload" | "browse">("upload");
+const activeTab = ref<"upload" | "browse" | "log">("upload");
 
 const tasks = ref<UploadTask[]>([]);
 const uploading = ref(false);
@@ -264,6 +295,8 @@ const dirSelected = ref<RemoteDirEntry[]>([]);
 const dirTableRef = ref();
 /** 当前列表实际读取的路径（不随勾选变化，避免「显示的路径」与「列表内容」错位） */
 const loadedPath = ref("");
+/** 读取序号：每次发起读取自增，晚返回的旧请求据此丢弃结果，防止覆盖/清空新列表 */
+const loadSeq = ref(0);
 /** 浏览页搜索关键词：只过滤已读取到的结果，按键不请求服务器 */
 const searchKeyword = ref("");
 
@@ -333,6 +366,38 @@ const serverArgs = () => ({
     server: `${server.value?.ip ?? ""}:${server.value?.port ?? 22}`,
 });
 
+// ============ 操作日志（复用 useStepLog；仅内存，不持久化，打开弹窗即清空） ============
+
+// 行数上限用独立 localStorage 键，与发布页日志（stepLogMaxLines）互不影响
+const stepLogApi = useStepLog({ maxLinesStorageKey: "serverFileLogMaxLines" });
+const { logPrintInfo, maxLogLines, setMaxLogLines, setLogContentRef, printInfoLog, onRemoveLogs } =
+    stepLogApi;
+
+// 行号显示开关：存 localStorage 本机记忆，默认开（与发布页日志同模式，键独立）
+const LOG_LINE_NO_VISIBLE_KEY = "serverFileLogShowLineNo";
+const loadShowLogLineNo = () => {
+    try {
+        return localStorage.getItem(LOG_LINE_NO_VISIBLE_KEY) !== "0";
+    } catch {
+        return true;
+    }
+};
+const showLogLineNo = ref(loadShowLogLineNo());
+const onShowLogLineNoChange = (value: boolean | string | number) => {
+    try {
+        localStorage.setItem(LOG_LINE_NO_VISIBLE_KEY, value ? "1" : "0");
+    } catch {
+        // localStorage 不可用时仅本次会话生效
+    }
+};
+
+// 行号列宽：按最大行号（id 自增，最后一行即最大值）的位数自适应，所有行号同一宽度右对齐
+const logLineNoWidth = computed(() => {
+    const lastId =
+        logPrintInfo.value.length > 0 ? (logPrintInfo.value[logPrintInfo.value.length - 1].id ?? 1) : 1;
+    return `${String(lastId).length + 1}ch`;
+});
+
 /** 置位/复位文件操作取消标记（与发布停止标记互不干扰） */
 const setFileCancel = async (cancel: boolean) => {
     await cmdInvoke("set_file_op_cancel", { cancel });
@@ -354,13 +419,23 @@ const openDialog = (row: RowServerType) => {
     dirSelected.value = [];
     loadedPath.value = "";
     searchKeyword.value = "";
+    // 复位读取/终止状态，避免上一轮会话的残留状态带入本次打开
+    loadingDir.value = false;
+    terminating.value = false;
     resetDownloadState();
     activeTab.value = "upload";
+    // 操作日志不持久化：每次打开清空，重新记录本次会话
+    onRemoveLogs();
+    printInfoLog(`打开文件管理：${row.name}（${row.ip}:${row.port}）`);
+    printInfoLog(`管理路径 ${uploadPaths.value.length} 个：${uploadPaths.value.join("、") || "（未配置）"}`);
     visible.value = true;
 };
 
 const onClose = () => {
-    visible.value = false;
+    // 与右上角 X（before-close）走同一守卫：上传/下载/删除中不放行；读取目录中先发终止标记再关闭
+    onBeforeClose(() => {
+        visible.value = false;
+    });
 };
 
 // 关闭前拦截：上传/下载/删除进行中不允许关闭；读取目录中允许关闭（自动终止读取）
@@ -487,6 +562,9 @@ const runUpload = async () => {
         unlistenProgress = await listen<FileProgressPayload>("file-progress", (event) => {
             onProgress(event.payload ?? {});
         });
+        const conflictText =
+            conflictMode.value === "skip" ? "跳过" : conflictMode.value === "keepLatest" ? "保留最新" : "覆盖";
+        printInfoLog(`开始上传：共 ${tasks.value.length} 个任务（同名文件${conflictText}）`);
         for (let index = 0; index < tasks.value.length; index++) {
             activeTaskIndex.value = index;
             const task = tasks.value[index];
@@ -515,11 +593,13 @@ const runUpload = async () => {
                     task.message = conflictMode.value === "keepLatest"
                         ? "服务器版本更新，已保留服务器文件"
                         : "目标已存在同名文件，已跳过";
+                    printInfoLog(`上传跳过：${task.fileName} → ${task.remotePath}（${task.message}）`, "log-warning");
                 } else {
                     task.status = "完成";
                     task.tagType = "success";
                     task.progressStatus = "success";
                     task.message = "上传成功";
+                    printInfoLog(`上传完成：${task.fileName} → ${task.remotePath}`, "log-success");
                 }
                 continue;
             }
@@ -529,6 +609,7 @@ const runUpload = async () => {
                 task.status = "已终止";
                 task.tagType = "info";
                 task.message = "已手动终止";
+                printInfoLog(`上传已终止：${task.fileName}`, "log-warning");
                 terminated = true;
                 break;
             }
@@ -536,6 +617,7 @@ const runUpload = async () => {
             task.tagType = "danger";
             task.progressStatus = "exception";
             task.message = errorText;
+            printInfoLog(`上传失败：${task.fileName}：${errorText}`, "log-error");
         }
     } finally {
         activeTaskIndex.value = -1;
@@ -560,9 +642,16 @@ const runUpload = async () => {
     const doneCount = tasks.value.filter((task) => task.status === "完成").length;
     const skippedCount = tasks.value.filter((task) => task.status === "已跳过").length;
     const summary = `完成 ${doneCount}，跳过 ${skippedCount}，失败 ${failedCount}`;
-    if (failedCount > 0) ElMessage.warning(`上传结束：${summary}`);
-    else if (terminated) ElMessage.info(`上传已终止：${summary}`);
-    else ElMessage.success(`上传结束：${summary}`);
+    if (failedCount > 0) {
+        ElMessage.warning(`上传结束：${summary}`);
+        printInfoLog(`上传结束：${summary}`, "log-warning");
+    } else if (terminated) {
+        ElMessage.info(`上传已终止：${summary}`);
+        printInfoLog(`上传已终止：${summary}`, "log-warning");
+    } else {
+        ElMessage.success(`上传结束：${summary}`);
+        printInfoLog(`上传结束：${summary}`, "log-success");
+    }
 };
 
 // ============ 浏览 / 删除 ============
@@ -593,6 +682,8 @@ const clearDirSelection = () => {
 };
 
 const loadDir = async (targetPath?: string) => {
+    // 串行化：上一次读取未结束时不发起新读取（按钮禁用之外的兜底）
+    if (loadingDir.value) return;
     // 目标路径：显式传入 > 当前唯一勾选 > 列表所属路径（勾选变成 0/多个时仍可刷新当前列表）
     const remotePath =
         targetPath ??
@@ -603,32 +694,47 @@ const loadDir = async (targetPath?: string) => {
     }
     loadingDir.value = true;
     terminating.value = false;
+    const seq = ++loadSeq.value;
     try {
+        // 与上传/下载一致：先复位文件操作取消标记，避免上次「终止」/关弹窗置位的
+        // 残留标记让本次读取在后端入口即被拦截，误报「已终止/无文件」
+        await setFileCancel(false);
+        printInfoLog(`读取目录：${remotePath}`);
         const result = await cmdInvoke<RemoteDirEntry[]>("list_remote_dir", {
             ...serverArgs(),
             remotePath,
             // 走文件操作独立取消标记，可被「终止操作」/关闭弹窗提前终止
             cancelScope: "file",
         });
+        // 期间已发起更新的读取（或弹窗已重开），本次结果直接丢弃，不覆盖新状态
+        if (seq !== loadSeq.value) return;
         if (result.code !== 0) {
             const errorText = String(result.data ?? "读取远程目录失败");
+            if (errorText.includes("已手动终止")) {
+                // 主动终止不算失败：保留当前列表与路径，避免把刚读到的内容清成「无文件」
+                printInfoLog(`读取已终止：${remotePath}`, "log-warning");
+                ElMessage.info("已终止读取远程目录");
+                return;
+            }
             dirEntries.value = [];
             loadedPath.value = "";
             clearDirSelection();
-            if (errorText.includes("已手动终止")) {
-                ElMessage.info("已终止读取远程目录");
-            } else {
-                ElMessage.error(errorText);
-            }
+            printInfoLog(`读取失败：${remotePath}：${errorText}`, "log-error");
+            ElMessage.error(errorText);
             return;
         }
-        dirEntries.value = Array.isArray(result.data) ? result.data : [];
+        const entries = Array.isArray(result.data) ? result.data : [];
+        dirEntries.value = entries;
         loadedPath.value = remotePath;
         clearDirSelection();
+        printInfoLog(`读取完成：${remotePath}（共 ${entries.length} 项）`, "log-success");
     } finally {
-        loadingDir.value = false;
-        terminating.value = false;
-        await setFileCancel(false);
+        // 只有权仍属于本次读取时才复位状态；被更新的读取接管时由其自行管理
+        if (seq === loadSeq.value) {
+            loadingDir.value = false;
+            terminating.value = false;
+            await setFileCancel(false);
+        }
     }
 };
 
@@ -716,7 +822,7 @@ const runDownload = async (rows: RemoteDirEntry[]) => {
             if (payload.file && payload.file !== downloadState.fileName) return;
             downloadState.percent = Math.max(0, Math.min(100, Math.round(Number(payload.percent ?? 0))));
         });
-
+        printInfoLog(`开始下载：共 ${files.length} 个文件`);
         for (let index = 0; index < files.length; index++) {
             // 点了「终止操作」后不再发起新的下载（当前文件在分块读循环内即时中断）
             if (terminating.value) {
@@ -741,14 +847,17 @@ const runDownload = async (rows: RemoteDirEntry[]) => {
 
             if (result.code === 0) {
                 successCount++;
+                printInfoLog(`下载完成：${file.name}`, "log-success");
                 continue;
             }
             const errorText = String(result.data ?? result.msg ?? "");
             if (errorText.includes("已手动终止")) {
+                printInfoLog(`下载已终止：${file.name}`, "log-warning");
                 stopped = true;
                 break;
             }
             failures.push(`${file.name}：${errorText}`);
+            printInfoLog(`下载失败：${file.name}：${errorText}`, "log-error");
         }
     } finally {
         downloading.value = false;
@@ -760,6 +869,7 @@ const runDownload = async (rows: RemoteDirEntry[]) => {
     }
 
     const summary = `成功下载 ${successCount} 项，失败 ${failures.length} 项` + (stopped ? "（已终止）" : "");
+    printInfoLog(`下载结束：${summary}`, failures.length > 0 || stopped ? "log-warning" : "log-success");
     if (failures.length > 0) {
         ElMessageBox.alert(
             `${summary}<br/>${failures.slice(0, 20).join("<br/>")}` +
@@ -778,13 +888,18 @@ const runDownload = async (rows: RemoteDirEntry[]) => {
 const runDelete = async (targetRows: RemoteDirEntry[]) => {
     // 删除目标固定为列表所属路径
     const base = loadedPath.value;
-    const rows = [...targetRows];
-    if (!base || rows.length === 0 || busy.value) return;
+    // 文件夹不允许删除（避免误删整棵子树），只保留文件；勾选列已屏蔽文件夹，这里双保险
+    const rows = targetRows.filter((row) => !row.isDir);
+    if (!base || busy.value) return;
+    if (rows.length === 0) {
+        if (targetRows.length > 0) ElMessage.warning("文件夹不支持删除，请选择要删除的文件");
+        return;
+    }
 
     const preview = rows.slice(0, 5).map((row) => row.name).join("、");
     const tip = rows.length === 1
-        ? `将删除 <b>${preview}</b>${rows[0].isDir ? "（文件夹会连同其下所有内容一起删除）" : ""}，<b>无法恢复</b>。`
-        : `将删除 <b>${rows.length}</b> 项：${preview}${rows.length > 5 ? " 等" : ""}。<br/>文件夹会连同其下所有内容一起删除，<b>无法恢复</b>。`;
+        ? `将删除 <b>${preview}</b>，<b>无法恢复</b>。`
+        : `将删除 <b>${rows.length}</b> 项：${preview}${rows.length > 5 ? " 等" : ""}，<b>无法恢复</b>。`;
     try {
         await ElMessageBox.confirm(tip, "删除确认", {
             confirmButtonText: "确认删除",
@@ -803,6 +918,7 @@ const runDelete = async (targetRows: RemoteDirEntry[]) => {
     let successCount = 0;
     let stopped = false;
     const failures: string[] = [];
+    printInfoLog(`开始删除：共 ${rows.length} 项`);
     try {
         for (const row of rows) {
             // 用户点「终止操作」后不再发起新的删除（已在执行的单条会自然结束）
@@ -818,8 +934,13 @@ const runDelete = async (targetRows: RemoteDirEntry[]) => {
                 retryCount: 1,
             });
             const output = String(result.data ?? "").trim();
-            if (result.code === 0 && output.startsWith(REMOTE_OP_OK)) successCount++;
-            else failures.push(`${row.name}：${output || "删除失败"}`);
+            if (result.code === 0 && output.startsWith(REMOTE_OP_OK)) {
+                successCount++;
+                printInfoLog(`删除成功：${row.name}`, "log-success");
+            } else {
+                failures.push(`${row.name}：${output || "删除失败"}`);
+                printInfoLog(`删除失败：${row.name}：${output || "删除失败"}`, "log-error");
+            }
         }
     } finally {
         deleting.value = false;
@@ -828,6 +949,7 @@ const runDelete = async (targetRows: RemoteDirEntry[]) => {
     }
 
     const summary = `成功删除 ${successCount} 项，失败 ${failures.length} 项` + (stopped ? "（已终止）" : "");
+    printInfoLog(`删除结束：${summary}`, failures.length > 0 || stopped ? "log-warning" : "log-success");
     if (failures.length > 0) {
         ElMessageBox.alert(`${summary}<br/>${failures.slice(0, 20).join("<br/>")}`, "删除结果", {
             confirmButtonText: "知道了",
@@ -843,7 +965,7 @@ const runDelete = async (targetRows: RemoteDirEntry[]) => {
 /** 操作条：删除勾选项 */
 const onDeleteSelected = () => runDelete(dirSelected.value);
 
-/** 操作列：删除单条（文件或文件夹） */
+/** 操作列：删除单条（仅文件，文件夹不允许删除） */
 const onDeleteRow = (row: RemoteDirEntry) => runDelete([row]);
 
 // 终止：上传/下载/删除/读取目录共用文件操作取消标记
@@ -851,6 +973,7 @@ const onTerminate = async () => {
     if ((!busy.value && !loadingDir.value) || terminating.value) return;
     terminating.value = true;
     await setFileCancel(true);
+    printInfoLog("请求终止当前操作…", "log-warning");
     if (loadingDir.value) ElMessage.info("已发送终止请求，正在停止读取远程目录");
     else if (uploading.value) ElMessage.info("已发送终止请求，当前文件将尽快停止");
     else if (downloading.value) ElMessage.info("已发送终止请求，当前文件将尽快停止下载");
@@ -866,6 +989,10 @@ defineExpose({ openDialog });
 </script>
 
 <style lang="scss" scoped>
+// 操作日志控制台为终端风格：底色与文字固定为一套自洽配色，不跟随主题变量（与发布页日志一致）
+$log-console-bg: #545c64;
+$log-console-text: #ffffff;
+
 .server-file {
     display: flex;
     flex-direction: column;
@@ -1068,6 +1195,64 @@ defineExpose({ openDialog });
 
 .mb10 {
     margin-bottom: 10px;
+}
+
+/* 操作日志页签：工具条 + 终端风格日志内容区 */
+.log-pane {
+    .log-toolbar {
+        display: flex;
+        align-items: center;
+        flex: 0 0 auto;
+        gap: 8px;
+
+        .log-count {
+            margin-left: auto;
+        }
+    }
+
+    .log-pane-content {
+        box-sizing: border-box;
+        flex: 1;
+        min-height: 120px;
+        overflow-y: auto;
+        background-color: $log-console-bg;
+        color: $log-console-text;
+        padding: 0.5rem 1em 0.5rem 0.5rem;
+        text-align: left;
+        font-size: 12px;
+
+        p {
+            margin: 0;
+            line-height: 1.7;
+            word-break: break-all;
+        }
+
+        // 日志行号：行内块 + 右对齐，列宽由行内样式按最大行号位数统一控制
+        .log-line-no {
+            display: inline-block;
+            margin-right: 6px;
+            color: var(--el-text-color-secondary);
+            text-align: right;
+            user-select: none;
+        }
+
+        // 日志行配色固定覆盖全局主题的 .log-* 定义
+        .log-info {
+            color: $log-console-text;
+        }
+
+        .log-warning {
+            color: var(--el-color-warning);
+        }
+
+        .log-error {
+            color: var(--el-color-danger);
+        }
+
+        .log-success {
+            color: var(--el-color-success);
+        }
+    }
 }
 </style>
 

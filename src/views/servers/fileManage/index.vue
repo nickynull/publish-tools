@@ -1,214 +1,232 @@
 <template>
-    <el-dialog v-model="visible" :title="dialogTitle" width="90vw" top="5vh" draggable
-        :close-on-click-modal="false" :before-close="onBeforeClose" modal-class="server-file-dialog">
-        <div class="server-file" v-loading="loadingDir">
-            <el-alert v-if="!uploadPaths.length" type="warning" :closable="false" show-icon
-                title="该服务器未配置文件管理路径" description="请先在服务器【修改】中补录「文件管理路径」，或使用「识别文件夹」自动识别。"
-                class="mb10" />
+    <div class="server-file-page layout-padding">
+        <el-card shadow="hover" class="layout-padding-auto server-file-card">
+            <template #header>
+                <div class="page-header">
+                    <span class="page-title">
+                        文件管理
+                        <template v-if="server">· {{ server.name }}（{{ server.ip }}:{{ server.port }}）</template>
+                    </span>
+                </div>
+            </template>
+            <div class="server-file" v-loading="loadingServer">
+                <el-empty v-if="serverError" :description="serverError">
+                    <el-button type="primary" @click="onCloseTab">返回列表</el-button>
+                </el-empty>
+                <template v-else>
+                    <el-alert v-if="!loadingServer && !uploadPaths.length" type="warning" :closable="false" show-icon
+                        title="该服务器未配置文件管理路径" description="请先在服务器【修改】中补录「文件管理路径」，或使用「识别文件夹」自动识别。"
+                        class="mb10" />
 
-            <el-form v-else label-width="6.5rem" size="default" class="server-file-form">
-                <el-form-item label="管理路径">
-                    <div class="path-row">
-                        <div class="path-list">
-                            <el-checkbox v-for="path in uploadPaths" :key="path"
-                                :model-value="selectedPaths.includes(path)" :disabled="busy"
-                                @change="(checked: any) => togglePath(path, !!checked)">
-                                {{ path }}
-                            </el-checkbox>
-                        </div>
-                        <div class="path-actions">
-                            <!-- 始终显示：未唯一勾选时置灰（title 说明原因）；读取目录中禁用，避免并发读取互相覆盖 -->
-                            <el-button title="仅勾选一个管理路径时可查看文件"
-                                :disabled="busy || loadingDir || selectedPaths.length !== 1" @click="onViewFiles">
-                                查看文件
-                            </el-button>
-                            <div class="path-bulk">
-                                <el-button size="small" :disabled="busy || selectedPaths.length === uploadPaths.length"
-                                    @click="setAllPaths(true)">
-                                    全选
-                                </el-button>
-                                <el-button size="small" :disabled="busy || selectedPaths.length === 0"
-                                    @click="setAllPaths(false)">
-                                    取消全选
-                                </el-button>
+                    <el-form v-else label-width="6.5rem" size="default" class="server-file-form">
+                        <el-form-item label="管理路径">
+                            <div class="path-row">
+                                <div class="path-list">
+                                    <el-checkbox v-for="path in uploadPaths" :key="path"
+                                        :model-value="selectedPaths.includes(path)" :disabled="busy"
+                                        @change="(checked: any) => togglePath(path, !!checked)">
+                                        {{ path }}
+                                    </el-checkbox>
+                                </div>
+                                <div class="path-actions">
+                                    <!-- 始终显示：未唯一勾选时置灰（title 说明原因）；读取目录中禁用，避免并发读取互相覆盖 -->
+                                    <el-button title="仅勾选一个管理路径时可查看文件"
+                                        :disabled="busy || loadingDir || selectedPaths.length !== 1" @click="onViewFiles">
+                                        查看文件
+                                    </el-button>
+                                    <div class="path-bulk">
+                                        <el-button size="small" :disabled="busy || selectedPaths.length === uploadPaths.length"
+                                            @click="setAllPaths(true)">
+                                            全选
+                                        </el-button>
+                                        <el-button size="small" :disabled="busy || selectedPaths.length === 0"
+                                            @click="setAllPaths(false)">
+                                            取消全选
+                                        </el-button>
+                                    </div>
+                                </div>
                             </div>
-                        </div>
-                    </div>
-                </el-form-item>
-            </el-form>
+                        </el-form-item>
+                    </el-form>
 
-            <el-tabs v-model="activeTab" class="server-file-tabs">
-                <el-tab-pane label="浏览文件" name="browse">
-                    <div class="pane-fill">
-                        <div class="browse-bar">
-                            <span class="hint browse-path">
-                                <template v-if="loadedPath">
-                                    路径：{{ loadedPath }}（共 {{ dirEntries.length }} 项<template v-if="searchTokens.length > 0">，匹配 {{ filteredDirEntries.length }} 项</template>）
-                                </template>
-                                <template v-else-if="selectedPaths.length > 1">已勾选 {{ selectedPaths.length }} 个管理路径，仅勾选 1 个时可查看文件</template>
-                                <template v-else>请勾选 1 个管理路径后点击「查看文件」</template>
-                            </span>
-                            <span v-if="loadedPath && selectedPaths.length === 1 && selectedPaths[0] !== loadedPath"
-                                class="hint browse-diverged">
-                                勾选已变更，点「刷新」切换
-                            </span>
-                            <el-input v-model="searchKeyword" class="browse-search" size="small" clearable
-                                :disabled="dirEntries.length === 0" placeholder="搜索名称（仅匹配已读取结果）">
-                                <template #prefix>
-                                    <el-icon><Search /></el-icon>
-                                </template>
-                            </el-input>
-                            <div class="browse-actions">
-                                <el-button size="small"
-                                    :disabled="busy || loadingDir || (selectedPaths.length !== 1 && !loadedPath)"
-                                    @click="onRefreshDir">刷新</el-button>
-                                <el-button size="small" type="primary" plain
-                                    :disabled="busy || dirFileSelected.length === 0" @click="onDownloadSelected">
-                                    下载所选{{ dirFileSelected.length > 0 ? `（${dirFileSelected.length}）` : "" }}
-                                </el-button>
-                                <el-button size="small" type="danger" plain :disabled="busy || dirSelected.length === 0"
-                                    @click="onDeleteSelected">
-                                    删除所选{{ dirSelected.length > 0 ? `（${dirSelected.length}）` : "" }}
-                                </el-button>
+                    <el-tabs v-model="activeTab" class="server-file-tabs">
+                        <el-tab-pane label="浏览文件" name="browse">
+                            <div class="pane-fill">
+                                <div class="browse-bar">
+                                    <span class="hint browse-path">
+                                        <template v-if="loadedPath">
+                                            路径：{{ loadedPath }}（共 {{ dirEntries.length }} 项<template v-if="searchTokens.length > 0">，匹配 {{ filteredDirEntries.length }} 项</template>）
+                                        </template>
+                                        <template v-else-if="selectedPaths.length > 1">已勾选 {{ selectedPaths.length }} 个管理路径，仅勾选 1 个时可查看文件</template>
+                                        <template v-else>请勾选 1 个管理路径后点击「查看文件」</template>
+                                    </span>
+                                    <span v-if="loadedPath && selectedPaths.length === 1 && selectedPaths[0] !== loadedPath"
+                                        class="hint browse-diverged">
+                                        勾选已变更，点「刷新」切换
+                                    </span>
+                                    <el-input v-model="searchKeyword" class="browse-search" size="small" clearable
+                                        :disabled="dirEntries.length === 0" placeholder="搜索名称（仅匹配已读取结果）">
+                                        <template #prefix>
+                                            <el-icon><Search /></el-icon>
+                                        </template>
+                                    </el-input>
+                                    <div class="browse-actions">
+                                        <el-button size="small"
+                                            :disabled="busy || loadingDir || (selectedPaths.length !== 1 && !loadedPath)"
+                                            @click="onRefreshDir">刷新</el-button>
+                                        <el-button size="small" type="primary" plain
+                                            :disabled="busy || dirFileSelected.length === 0" @click="onDownloadSelected">
+                                            下载所选{{ dirFileSelected.length > 0 ? `（${dirFileSelected.length}）` : "" }}
+                                        </el-button>
+                                        <el-button size="small" type="danger" plain :disabled="busy || dirSelected.length === 0"
+                                            @click="onDeleteSelected">
+                                            删除所选{{ dirSelected.length > 0 ? `（${dirSelected.length}）` : "" }}
+                                        </el-button>
+                                    </div>
+                                </div>
+                                <div v-if="downloading" class="download-progress">
+                                    <span class="hint">
+                                        正在下载 {{ downloadState.fileName }}
+                                        <template v-if="downloadState.total > 1">（{{ downloadState.index }}/{{ downloadState.total }}）</template>
+                                    </span>
+                                    <el-progress :percentage="downloadState.percent" :stroke-width="10" />
+                                </div>
+                                <el-table ref="dirTableRef" :data="filteredDirEntries" size="small" height="100%"
+                                    class="fill-table" row-key="path" v-loading="loadingDir"
+                                    element-loading-text="正在读取远程目录…"
+                                    :empty-text="searchTokens.length > 0 ? '没有匹配的条目' : '该路径下没有文件或文件夹'"
+                                    @selection-change="onDirSelectionChange">
+                                    <!-- 文件夹不可勾选（下载/删除只支持文件，删除文件夹易误删整棵子树） -->
+                                    <el-table-column type="selection" width="46" reserve-selection
+                                        :selectable="(row: RemoteDirEntry) => !row.isDir" />
+                                    <el-table-column label="名称" min-width="240" show-overflow-tooltip sortable
+                                        :sort-method="sortByName">
+                                        <template #default="{ row }">
+                                            <span class="entry-name">{{ row.isDir ? "📁" : "📄" }} {{ row.name }}</span>
+                                        </template>
+                                    </el-table-column>
+                                    <el-table-column label="类型" width="90" sortable :sort-method="sortByType">
+                                        <template #default="{ row }">
+                                            <el-tag size="small" :type="row.isDir ? 'success' : 'info'">{{ row.isDir ? "文件夹" : "文件" }}</el-tag>
+                                        </template>
+                                    </el-table-column>
+                                    <el-table-column label="格式" width="80" sortable :sort-method="sortByExt">
+                                        <template #default="{ row }">{{ entryExt(row) }}</template>
+                                    </el-table-column>
+                                    <el-table-column label="大小" width="110" sortable :sort-method="sortBySize">
+                                        <template #default="{ row }">{{ row.isDir ? "—" : formatFileSize(row.size) }}</template>
+                                    </el-table-column>
+                                    <el-table-column label="修改时间" width="170" sortable :sort-method="sortByModified">
+                                        <template #default="{ row }">
+                                            {{ row.modified > 0 ? formatDate(new Date(row.modified * 1000), "YYYY-mm-dd HH:MM:SS") : "—" }}
+                                        </template>
+                                    </el-table-column>
+                                    <el-table-column label="操作" width="120" fixed="right">
+                                        <template #default="{ row }">
+                                            <el-button v-if="!row.isDir" size="small" text type="primary" :disabled="busy"
+                                                @click="onDownloadRow(row)">
+                                                下载
+                                            </el-button>
+                                            <span v-else class="hint row-action-empty">—</span>
+                                            <el-button v-if="!row.isDir" size="small" text type="danger" :disabled="busy"
+                                                @click="onDeleteRow(row)">
+                                                删除
+                                            </el-button>
+                                            <span v-else class="hint row-action-empty">—</span>
+                                        </template>
+                                    </el-table-column>
+                                </el-table>
                             </div>
-                        </div>
-                        <div v-if="downloading" class="download-progress">
-                            <span class="hint">
-                                正在下载 {{ downloadState.fileName }}
-                                <template v-if="downloadState.total > 1">（{{ downloadState.index }}/{{ downloadState.total }}）</template>
-                            </span>
-                            <el-progress :percentage="downloadState.percent" :stroke-width="10" />
-                        </div>
-                        <el-table ref="dirTableRef" :data="filteredDirEntries" size="small" height="100%"
-                            class="fill-table" row-key="path"
-                            :empty-text="searchTokens.length > 0 ? '没有匹配的条目' : '该路径下没有文件或文件夹'"
-                            @selection-change="onDirSelectionChange">
-                            <!-- 文件夹不可勾选（下载/删除只支持文件，删除文件夹易误删整棵子树） -->
-                            <el-table-column type="selection" width="46" reserve-selection
-                                :selectable="(row: RemoteDirEntry) => !row.isDir" />
-                            <el-table-column label="名称" min-width="240" show-overflow-tooltip sortable
-                                :sort-method="sortByName">
-                                <template #default="{ row }">
-                                    <span class="entry-name">{{ row.isDir ? "📁" : "📄" }} {{ row.name }}</span>
-                                </template>
-                            </el-table-column>
-                            <el-table-column label="类型" width="90" sortable :sort-method="sortByType">
-                                <template #default="{ row }">
-                                    <el-tag size="small" :type="row.isDir ? 'success' : 'info'">{{ row.isDir ? "文件夹" : "文件" }}</el-tag>
-                                </template>
-                            </el-table-column>
-                            <el-table-column label="大小" width="110" sortable :sort-method="sortBySize">
-                                <template #default="{ row }">{{ row.isDir ? "—" : formatFileSize(row.size) }}</template>
-                            </el-table-column>
-                            <el-table-column label="修改时间" width="170" sortable :sort-method="sortByModified">
-                                <template #default="{ row }">
-                                    {{ row.modified > 0 ? formatDate(new Date(row.modified * 1000), "YYYY-mm-dd HH:MM:SS") : "—" }}
-                                </template>
-                            </el-table-column>
-                            <el-table-column label="操作" width="120" fixed="right">
-                                <template #default="{ row }">
-                                    <el-button v-if="!row.isDir" size="small" text type="primary" :disabled="busy"
-                                        @click="onDownloadRow(row)">
-                                        下载
-                                    </el-button>
-                                    <span v-else class="hint row-action-empty">—</span>
-                                    <el-button v-if="!row.isDir" size="small" text type="danger" :disabled="busy"
-                                        @click="onDeleteRow(row)">
-                                        删除
-                                    </el-button>
-                                    <span v-else class="hint row-action-empty">—</span>
-                                </template>
-                            </el-table-column>
-                        </el-table>
-                    </div>
-                </el-tab-pane>
-                <el-tab-pane label="文件上传" name="upload">
-                    <div class="pane-fill">
-                        <div class="exist-file-bar">
-                            <span class="hint">存在文件</span>
-                            <el-radio-group v-model="conflictMode" size="small" :disabled="busy">
-                                <el-radio border value="skip">跳过</el-radio>
-                                <el-radio border value="overwrite">覆盖</el-radio>
-                                <el-radio border value="keepLatest">保留最新</el-radio>
-                            </el-radio-group>
-                            <span class="hint exist-hint">
-                                同路径已有同名文件时：跳过 = 保留服务器文件，覆盖 = 用本地文件替换，保留最新 = 比较两端修改时间后保留较新的那份
-                            </span>
-                            <div class="exist-file-actions">
-                                <el-button size="small" type="primary" :disabled="!canUpload"
-                                    :loading="uploading" :title="canUpload ? '' : '请先在上方勾选管理路径'"
-                                    @click="onChooseFiles">
-                                    选择文件上传
-                                </el-button>
-                                <el-button size="small" :disabled="uploading || tasks.length === 0"
-                                    :title="uploading ? '上传进行中，无法清空上传记录' : ''" @click="onClearTasks">
-                                    清空上传记录
-                                </el-button>
+                        </el-tab-pane>
+                        <el-tab-pane label="文件上传" name="upload">
+                            <div class="pane-fill">
+                                <div class="exist-file-bar">
+                                    <span class="hint">存在文件</span>
+                                    <el-radio-group v-model="conflictMode" size="small" :disabled="busy">
+                                        <el-radio border value="skip">跳过</el-radio>
+                                        <el-radio border value="overwrite">覆盖</el-radio>
+                                        <el-radio border value="keepLatest">保留最新</el-radio>
+                                    </el-radio-group>
+                                    <span class="hint exist-hint">
+                                        同路径已有同名文件时：跳过 = 保留服务器文件，覆盖 = 用本地文件替换，保留最新 = 比较两端修改时间后保留较新的那份
+                                    </span>
+                                    <div class="exist-file-actions">
+                                        <el-button size="small" type="primary" :disabled="!canUpload"
+                                            :loading="uploading" :title="canUpload ? '' : '请先在上方勾选管理路径'"
+                                            @click="onChooseFiles">
+                                            选择文件上传
+                                        </el-button>
+                                        <el-button size="small" :disabled="uploading || tasks.length === 0"
+                                            :title="uploading ? '上传进行中，无法清空上传记录' : ''" @click="onClearTasks">
+                                            清空上传记录
+                                        </el-button>
+                                    </div>
+                                </div>
+                                <el-table :data="tasks" size="small" height="100%" class="fill-table"
+                                    empty-text="尚未选择文件，点右上「选择文件上传」">
+                                    <el-table-column type="index" label="#" width="50" />
+                                    <el-table-column prop="fileName" label="文件" min-width="150" show-overflow-tooltip />
+                                    <el-table-column prop="remotePath" label="目标路径" min-width="240" show-overflow-tooltip />
+                                    <el-table-column label="状态" width="100">
+                                        <template #default="{ row }">
+                                            <el-tag size="small" :type="row.tagType">{{ row.status }}</el-tag>
+                                        </template>
+                                    </el-table-column>
+                                    <el-table-column label="进度" width="170">
+                                        <template #default="{ row }">
+                                            <el-progress :percentage="row.percent" :status="row.progressStatus"
+                                                :stroke-width="10" />
+                                        </template>
+                                    </el-table-column>
+                                    <el-table-column prop="message" label="结果" min-width="160" show-overflow-tooltip />
+                                </el-table>
                             </div>
-                        </div>
-                        <el-table :data="tasks" size="small" height="100%" class="fill-table"
-                            empty-text="尚未选择文件，点右上「选择文件上传」">
-                            <el-table-column type="index" label="#" width="50" />
-                            <el-table-column prop="fileName" label="文件" min-width="150" show-overflow-tooltip />
-                            <el-table-column prop="remotePath" label="目标路径" min-width="240" show-overflow-tooltip />
-                            <el-table-column label="状态" width="100">
-                                <template #default="{ row }">
-                                    <el-tag size="small" :type="row.tagType">{{ row.status }}</el-tag>
-                                </template>
-                            </el-table-column>
-                            <el-table-column label="进度" width="170">
-                                <template #default="{ row }">
-                                    <el-progress :percentage="row.percent" :status="row.progressStatus"
-                                        :stroke-width="10" />
-                                </template>
-                            </el-table-column>
-                            <el-table-column prop="message" label="结果" min-width="160" show-overflow-tooltip />
-                        </el-table>
+                        </el-tab-pane>
+                        <el-tab-pane label="操作日志" name="log">
+                            <div class="pane-fill log-pane">
+                                <div class="log-toolbar">
+                                    <el-switch v-model="showLogLineNo" size="small" title="显示/隐藏日志行号"
+                                        @change="onShowLogLineNoChange" />
+                                    <span class="hint">行号</span>
+                                    <span class="hint">行数限制</span>
+                                    <el-input-number title="日志最多保留的行数（超出后自动清理最旧的行）" size="small"
+                                        v-model="maxLogLines" :min="10" :max="100000" :step="100" :controls="false"
+                                        style="width: 100px" @change="setMaxLogLines" />
+                                    <span class="hint">行</span>
+                                    <span class="hint log-count">共 {{ logPrintInfo.length }} 行</span>
+                                    <el-button size="small" type="info" :icon="CircleClose" @click="onRemoveLogs">
+                                        清空日志
+                                    </el-button>
+                                </div>
+                                <div :ref="setLogContentRef" class="log-pane-content">
+                                    <p v-for="(logLine, logIndex) in logPrintInfo" :class="logLine.type">
+                                        <span v-if="showLogLineNo" class="log-line-no"
+                                            :style="{ minWidth: logLineNoWidth }">{{
+                                            logLine.id ?? logIndex + 1
+                                            }}</span>
+                                        {{ logLine.content.value }}
+                                    </p>
+                                </div>
+                            </div>
+                        </el-tab-pane>
+                    </el-tabs>
+
+                    <div class="page-footer">
+                        <span v-if="busy || loadingDir" class="hint footer-hint">{{ busyHint }}</span>
+                        <el-button v-if="busy || loadingDir" type="danger" plain :loading="terminating" @click="onTerminate">
+                            终止操作
+                        </el-button>
+                        <el-button @click="onCloseTab" size="default">关闭页签</el-button>
                     </div>
-                </el-tab-pane>
-                <el-tab-pane label="操作日志" name="log">
-                    <div class="pane-fill log-pane">
-                        <div class="log-toolbar">
-                            <el-switch v-model="showLogLineNo" size="small" title="显示/隐藏日志行号"
-                                @change="onShowLogLineNoChange" />
-                            <span class="hint">行号</span>
-                            <span class="hint">行数限制</span>
-                            <el-input-number title="日志最多保留的行数（超出后自动清理最旧的行）" size="small"
-                                v-model="maxLogLines" :min="10" :max="100000" :step="100" :controls="false"
-                                style="width: 100px" @change="setMaxLogLines" />
-                            <span class="hint">行</span>
-                            <span class="hint log-count">共 {{ logPrintInfo.length }} 行</span>
-                            <el-button size="small" type="info" :icon="CircleClose" @click="onRemoveLogs">
-                                清空日志
-                            </el-button>
-                        </div>
-                        <div :ref="setLogContentRef" class="log-pane-content">
-                            <p v-for="(logLine, logIndex) in logPrintInfo" :class="logLine.type">
-                                <span v-if="showLogLineNo" class="log-line-no"
-                                    :style="{ minWidth: logLineNoWidth }">{{
-                                    logLine.id ?? logIndex + 1
-                                    }}</span>
-                                {{ logLine.content.value }}
-                            </p>
-                        </div>
-                    </div>
-                </el-tab-pane>
-            </el-tabs>
-        </div>
-        <template #footer>
-            <div class="dialog-footer">
-                <span v-if="busy || loadingDir" class="hint footer-hint">{{ busyHint }}</span>
-                <el-button v-if="busy || loadingDir" type="danger" plain :loading="terminating" @click="onTerminate">
-                    终止操作
-                </el-button>
-                <el-button @click="onClose" size="default" :disabled="busy">关闭</el-button>
+                </template>
             </div>
-        </template>
-    </el-dialog>
+        </el-card>
+    </div>
 </template>
 
-<script setup lang="ts" name="serverFileDialog">
-import { computed, onUnmounted, reactive, ref, watch } from "vue";
+<script setup lang="ts" name="serverFile">
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
@@ -222,7 +240,13 @@ import {
 import { formatDate } from "@/utils/formatTime";
 import { Local } from "@/utils/storage";
 import { useStepLog } from "@/composables/useStepLog";
+import { useServerDb } from "@/database/servers/index";
+import { registerTabCloseGuard } from "@/utils/tabCloseGuard";
+import mittBus from "@/utils/mitt";
 import { CircleClose, Search } from "@element-plus/icons-vue";
+
+/** 文件管理页签的路由路径（与 route.ts 中 /server/file 一致，页签关闭守卫按它匹配） */
+const FILE_MANAGE_PATH = "/server/file";
 
 /** 上传进度事件负载（与后端 utils/progress.rs 一致） */
 type FileProgressPayload = {
@@ -279,8 +303,22 @@ type UploadTask = {
     message: string;
 };
 
-const visible = ref(false);
+const route = useRoute();
+const serverDb = useServerDb();
+
+/**
+ * 页签身份：服务器 id，仅取 setup 时的一次快照。
+ * 同一路由可开多个页签（keep-alive 按 route.fullPath 各存一个实例），而 useRoute() 是全局
+ * 响应式对象，若缓存实例继续跟随它，切回页签时会显示成别的服务器。
+ */
+const rawServerId = Array.isArray(route.query.serverId) ? route.query.serverId[0] : route.query.serverId;
+const serverId = Number(rawServerId ?? 0);
+
 const server = ref<RowServerType | null>(null);
+const loadingServer = ref(true);
+/** 服务器加载失败原因（服务器已删除、缺少参数等），非空时展示空态而不是操作界面 */
+const serverError = ref("");
+
 const uploadPaths = ref<string[]>([]);
 const selectedPaths = ref<string[]>([]);
 const conflictMode = ref<ConflictMode>(readConflictMode());
@@ -327,6 +365,8 @@ const downloading = ref(false);
 const downloadState = reactive({ index: 0, total: 0, fileName: "", percent: 0 });
 
 let unlistenProgress: (() => void) | null = null;
+/** 关闭页签守卫的反注册函数 */
+let unregisterTabCloseGuard: (() => void) | null = null;
 
 const busy = computed(() => uploading.value || deleting.value || downloading.value);
 const canUpload = computed(() => !busy.value && selectedPaths.value.length > 0);
@@ -352,6 +392,17 @@ const sortBySize = (a: RemoteDirEntry, b: RemoteDirEntry) =>
 /** 修改时间：未知（0）参与排序的最小值，同时间再按名称 */
 const sortByModified = (a: RemoteDirEntry, b: RemoteDirEntry) =>
     Number(a.modified) - Number(b.modified) || compareName(a, b);
+
+/** 文件格式（扩展名，小写）：文件夹 / 无扩展名 / 隐藏文件（.gitignore）显示 — */
+const entryExt = (row: RemoteDirEntry) => {
+    if (row.isDir) return "—";
+    const dot = row.name.lastIndexOf(".");
+    return dot > 0 ? row.name.slice(dot + 1).toLowerCase() || "—" : "—";
+};
+
+/** 格式：同格式再按名称（— 与无格式条目自然归为一组） */
+const sortByExt = (a: RemoteDirEntry, b: RemoteDirEntry) =>
+    entryExt(a).localeCompare(entryExt(b)) || compareName(a, b);
 /** 底部状态提示（上传/下载/删除/读取目录） */
 const busyHint = computed(() => {
     if (uploading.value) return "上传进行中，可点击「终止操作」提前结束…";
@@ -360,9 +411,6 @@ const busyHint = computed(() => {
     if (loadingDir.value) return "正在读取远程目录，可点击「终止操作」停止…";
     return "";
 });
-const dialogTitle = computed(() =>
-    server.value ? `文件管理 - ${server.value.name}（${server.value.ip}:${server.value.port}）` : "文件管理"
-);
 
 /** 服务器连接参数（复用服务器行上的账号/密码/地址） */
 const serverArgs = () => ({
@@ -371,7 +419,11 @@ const serverArgs = () => ({
     server: `${server.value?.ip ?? ""}:${server.value?.port ?? 22}`,
 });
 
-// ============ 操作日志（复用 useStepLog；仅内存，不持久化，打开弹窗即清空） ============
+/** HTML 转义：远端文件名/错误文本拼进 dangerouslyUseHTMLString 弹窗前必须转义（防注入/破版） */
+const escapeHtml = (text: string) =>
+    String(text ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+// ============ 操作日志（复用 useStepLog；仅内存，不持久化，打开页签即清空） ============
 
 // 行数上限用独立 localStorage 键，与发布页日志（stepLogMaxLines）互不影响
 const stepLogApi = useStepLog({ maxLinesStorageKey: "serverFileLogMaxLines" });
@@ -383,7 +435,8 @@ const LOG_LINE_NO_VISIBLE_KEY = "serverFileLogShowLineNo";
 const loadShowLogLineNo = () => {
     try {
         return localStorage.getItem(LOG_LINE_NO_VISIBLE_KEY) !== "0";
-    } catch {
+    } catch (error) {
+        console.error("读取行号显示开关失败，回退为显示:", error);
         return true;
     }
 };
@@ -391,8 +444,10 @@ const showLogLineNo = ref(loadShowLogLineNo());
 const onShowLogLineNoChange = (value: boolean | string | number) => {
     try {
         localStorage.setItem(LOG_LINE_NO_VISIBLE_KEY, value ? "1" : "0");
-    } catch {
+    } catch (error) {
+        console.error("保存行号显示开关失败:", error);
         // localStorage 不可用时仅本次会话生效
+        printInfoLog(`保存行号显示开关失败：${(error as any)?.message ?? String(error)}`, "log-error");
     }
 };
 
@@ -403,49 +458,17 @@ const logLineNoWidth = computed(() => {
     return `${String(lastId).length + 1}ch`;
 });
 
-/** 置位/复位文件操作取消标记（与发布停止标记互不干扰） */
+/** 置位/复位文件操作取消标记（与发布停止标记互不干扰）；内部吞异常，调用方无需再 catch */
 const setFileCancel = async (cancel: boolean) => {
-    await cmdInvoke("set_file_op_cancel", { cancel });
+    try {
+        await cmdInvoke("set_file_op_cancel", { cancel });
+    } catch (error) {
+        console.error("设置文件操作取消标记失败:", error);
+    }
 };
 
-// 处理方式改动即记忆（全局偏好，下次打开弹窗沿用）；与具体服务器无关
+// 处理方式改动即记忆（全局偏好，下次打开页签沿用）；与具体服务器无关
 watch(conflictMode, (mode) => Local.set(CONFLICT_MODE_KEY, mode));
-
-/**
- * 硬复位上一轮会话的全部运行态。
- * 弹窗组件长期挂载（关闭只是 visible=false），ref 状态、表格内部 reserve-selection、
- * file-progress 监听与在途请求都会存活到下一次打开，必须在打开时显式清掉。
- */
-const resetSession = () => {
-    // 1) 先解绑上一次可能残留的进度监听，避免旧监听在新会话里重复处理事件
-    unlistenProgress?.();
-    unlistenProgress = null;
-    // 2) 序号自增：让所有在途 loadDir 的结果（含其 finally 里的状态复位）被判为过期并丢弃，
-    //    否则上一台服务器的目录结果会写进本次会话（显示旧路径、后续下载/删除跨服务器误操作）
-    loadSeq.value += 1;
-    // 3) 清表格内部 reserve-selection 的历史选中（row-key=path，不清会在重读时被自动重新勾选）
-    clearDirSelection();
-    // 4) 进行中标志：正常关闭有 busy 拦截，这里兜底异常路径残留（一打开就 busy、按钮全灰）
-    uploading.value = false;
-    deleting.value = false;
-    downloading.value = false;
-    loadingDir.value = false;
-    terminating.value = false;
-    activeTaskIndex.value = -1;
-    // 5) 业务数据
-    tasks.value = [];
-    dirEntries.value = [];
-    loadedPath.value = "";
-    searchKeyword.value = "";
-    selectedPaths.value = [];
-    resetDownloadState();
-    // 6) 每次打开都回到首个页签「浏览文件」（上一次会话可能停在其它页签）
-    activeTab.value = "browse";
-    // 7) 操作日志仅内存、不持久化：每次打开清空，重新记录本次会话
-    onRemoveLogs();
-    // 8) 复位后端文件操作取消标记（上一轮关闭/终止可能置位），避免首次读取即被拦截
-    setFileCancel(false).catch(() => undefined);
-};
 
 /**
  * 管理路径末级目录名是否为 Templates（大小写不敏感，兼容 Win/Linux 分隔符与结尾斜杠）。
@@ -457,43 +480,68 @@ const isTemplatesPath = (path: string) => {
     return name.toLowerCase() === "templates";
 };
 
-// 打开弹窗
-const openDialog = (row: RowServerType) => {
-    server.value = row;
-    uploadPaths.value = Array.isArray(row.uploadPaths) ? row.uploadPaths.filter((path) => !!path) : [];
-    // 「存在文件」处理方式是全局偏好（跨服务器记忆，用户显式选择），不随会话复位
-    conflictMode.value = readConflictMode();
-    // 清除上一轮会话的全部历史数据（列表/勾选/上传记录/日志/在途请求/监听）
-    resetSession();
-    // 默认勾选所有 Templates 文件夹路径（一次上传到各服务端 Templates 的常见用法）；
-    // 勾选超过 1 个时【查看文件】按既有规则置灰，留一个即可浏览
-    selectedPaths.value = uploadPaths.value.filter(isTemplatesPath);
-    printInfoLog(`打开文件管理：${row.name}（${row.ip}:${row.port}）`);
-    printInfoLog(`管理路径 ${uploadPaths.value.length} 个：${uploadPaths.value.join("、") || "（未配置）"}`);
-    if (selectedPaths.value.length > 0) {
-        printInfoLog(`默认勾选 Templates 路径 ${selectedPaths.value.length} 个：${selectedPaths.value.join("、")}`);
-    }
-    visible.value = true;
+// ============ 初始化（页签 = 一个实例，状态天然隔离，无需弹窗时代的硬复位） ============
+
+const initSession = () => {
+    // 复位后端文件操作取消标记（上一次页签关闭/终止可能置位），避免首次读取即被拦截
+    setFileCancel(false);
+    onRemoveLogs();
+    clearDirSelection();
+    tasks.value = [];
+    dirEntries.value = [];
+    loadedPath.value = "";
+    searchKeyword.value = "";
 };
 
-const onClose = () => {
-    // 与右上角 X（before-close）走同一守卫：上传/下载/删除中不放行；读取目录中先发终止标记再关闭
-    onBeforeClose(() => {
-        visible.value = false;
+/** 加载服务器（只依赖路由里的 serverId，刷新/重启后重建页签同样可用） */
+const loadServer = async () => {
+    loadingServer.value = true;
+    serverError.value = "";
+    try {
+        if (!serverId) {
+            serverError.value = "缺少服务器参数（serverId），请从服务器列表重新打开文件管理";
+            return;
+        }
+        const result = await serverDb.getServerById(serverId);
+        if (result.code !== 0) {
+            serverError.value = result.msg || "读取服务器信息失败";
+            printInfoLog(`读取服务器信息失败：${serverError.value}`, "log-error");
+            return;
+        }
+        const row = result.data?.data as RowServerType | undefined;
+        if (!row || !row.id) {
+            serverError.value = "服务器不存在或已被删除";
+            printInfoLog("服务器不存在或已被删除", "log-error");
+            return;
+        }
+        server.value = row;
+        uploadPaths.value = Array.isArray(row.uploadPaths) ? row.uploadPaths.filter((path) => !!path) : [];
+        // 默认勾选所有 Templates 文件夹路径（一次上传到各服务端 Templates 的常见用法）；
+        // 勾选超过 1 个时【查看文件】按既有规则置灰，留一个即可浏览
+        selectedPaths.value = uploadPaths.value.filter(isTemplatesPath);
+        printInfoLog(`打开文件管理：${row.name}（${row.ip}:${row.port}）`);
+        printInfoLog(`管理路径 ${uploadPaths.value.length} 个：${uploadPaths.value.join("、") || "（未配置）"}`);
+        if (selectedPaths.value.length > 0) {
+            printInfoLog(`默认勾选 Templates 路径 ${selectedPaths.value.length} 个：${selectedPaths.value.join("、")}`);
+        }
+    } catch (error: any) {
+        const errorText = error?.message ?? String(error);
+        console.error("读取服务器信息异常:", error);
+        serverError.value = `读取服务器信息异常：${errorText}`;
+    } finally {
+        loadingServer.value = false;
+    }
+};
+
+/** 关闭当前页签：走 tagsView 的统一关闭链路（仍会经过本页注册的关闭守卫） */
+const onCloseTab = () => {
+    mittBus.emit<any>("onCurrentContextmenuClick", {
+        contextMenuClickId: 1,
+        path: FILE_MANAGE_PATH,
+        name: String(route.name ?? ""),
+        query: { ...route.query },
+        meta: route.meta,
     });
-};
-
-// 关闭前拦截：上传/下载/删除进行中不允许关闭；读取目录中允许关闭（自动终止读取）
-const onBeforeClose = (done: () => void) => {
-    if (busy.value) {
-        ElMessage.warning("正在处理文件，请先等待完成或点击「终止操作」");
-        return;
-    }
-    if (loadingDir.value) {
-        // 触发终止标记，让后端读取尽快返回（结果丢弃）
-        setFileCancel(true);
-    }
-    done();
 };
 
 const togglePath = (path: string, checked: boolean) => {
@@ -546,7 +594,10 @@ const onChooseFiles = async () => {
     try {
         chosen = await open({ multiple: true, directory: false, title: "选择要上传的文件" });
     } catch (error: any) {
-        ElMessage.error("打开文件选择框失败：" + (error?.message ?? String(error)));
+        const errorText = error?.message ?? String(error);
+        console.error("打开文件选择框失败:", error);
+        printInfoLog(`打开文件选择框失败：${errorText}`, "log-error");
+        ElMessage.error("打开文件选择框失败：" + errorText);
         return;
     }
     if (!chosen) {
@@ -588,6 +639,7 @@ const onChooseFiles = async () => {
             { confirmButtonText: "开始上传", cancelButtonText: "取消", type: "info", dangerouslyUseHTMLString: true }
         );
     } catch {
+        // 用户点「取消」时 ElMessageBox reject（非异常），不记录日志
         return;
     }
 
@@ -611,6 +663,11 @@ const runUpload = async () => {
             conflictMode.value === "skip" ? "跳过" : conflictMode.value === "keepLatest" ? "保留最新" : "覆盖";
         printInfoLog(`开始上传：共 ${tasks.value.length} 个任务（同名文件${conflictText}）`);
         for (let index = 0; index < tasks.value.length; index++) {
+            // 与下载/删除一致：点「终止操作」后不再发起新的上传任务
+            if (terminating.value) {
+                terminated = true;
+                break;
+            }
             activeTaskIndex.value = index;
             const task = tasks.value[index];
             task.status = "上传中";
@@ -664,6 +721,18 @@ const runUpload = async () => {
             task.message = errorText;
             printInfoLog(`上传失败：${task.fileName}：${errorText}`, "log-error");
         }
+    } catch (error: any) {
+        // 代码本身抛异常（如监听器注册失败），逐条结果分支覆盖不到的兜底
+        const errorText = error?.message ?? String(error);
+        const task = tasks.value[activeTaskIndex.value];
+        if (task) {
+            task.status = "失败";
+            task.tagType = "danger";
+            task.progressStatus = "exception";
+            task.message = `上传异常：${errorText}`;
+        }
+        console.error("上传异常:", error);
+        printInfoLog(`上传异常：${task?.fileName ?? "未知任务"}：${errorText}`, "log-error");
     } finally {
         activeTaskIndex.value = -1;
         uploading.value = false;
@@ -706,6 +775,7 @@ const onViewFiles = async () => {
         ElMessage.warning("请只勾选一个管理路径后再查看文件");
         return;
     }
+    // 先切到浏览页签再读目录，表格上的 loading 层才能覆盖整个读取过程
     activeTab.value = "browse";
     await loadDir(selectedPaths.value[0]);
 };
@@ -741,17 +811,17 @@ const loadDir = async (targetPath?: string) => {
     terminating.value = false;
     const seq = ++loadSeq.value;
     try {
-        // 与上传/下载一致：先复位文件操作取消标记，避免上次「终止」/关弹窗置位的
+        // 与上传/下载一致：先复位文件操作取消标记，避免上次「终止」/关页签置位的
         // 残留标记让本次读取在后端入口即被拦截，误报「已终止/无文件」
         await setFileCancel(false);
         printInfoLog(`读取目录：${remotePath}`);
         const result = await cmdInvoke<RemoteDirEntry[]>("list_remote_dir", {
             ...serverArgs(),
             remotePath,
-            // 走文件操作独立取消标记，可被「终止操作」/关闭弹窗提前终止
+            // 走文件操作独立取消标记，可被「终止操作」提前终止
             cancelScope: "file",
         });
-        // 期间已发起更新的读取（或弹窗已重开），本次结果直接丢弃，不覆盖新状态
+        // 期间已发起更新的读取（或页签已重开），本次结果直接丢弃，不覆盖新状态
         if (seq !== loadSeq.value) return;
         if (result.code !== 0) {
             const errorText = String(result.data ?? "读取远程目录失败");
@@ -773,6 +843,17 @@ const loadDir = async (targetPath?: string) => {
         loadedPath.value = remotePath;
         clearDirSelection();
         printInfoLog(`读取完成：${remotePath}（共 ${entries.length} 项）`, "log-success");
+    } catch (error: any) {
+        console.error("读取远程目录异常:", error);
+        // 只有本次读取仍有效时才更新界面状态（过期请求的结果直接丢弃，由新读取自行管理）
+        if (seq === loadSeq.value) {
+            const errorText = error?.message ?? String(error);
+            dirEntries.value = [];
+            loadedPath.value = "";
+            clearDirSelection();
+            printInfoLog(`读取异常：${remotePath}：${errorText}`, "log-error");
+            ElMessage.error(`读取远程目录异常：${errorText}`);
+        }
     } finally {
         // 只有权仍属于本次读取时才复位状态；被更新的读取接管时由其自行管理
         if (seq === loadSeq.value) {
@@ -808,7 +889,10 @@ const chooseLocalTargets = async (files: RemoteDirEntry[]): Promise<string[] | n
         try {
             savePath = await save({ defaultPath: files[0].name, title: "选择保存位置" });
         } catch (error: any) {
-            ElMessage.error("打开保存对话框失败：" + (error?.message ?? String(error)));
+            const errorText = error?.message ?? String(error);
+            console.error("打开保存对话框失败:", error);
+            printInfoLog(`打开保存对话框失败：${errorText}`, "log-error");
+            ElMessage.error("打开保存对话框失败：" + errorText);
             return null;
         }
         if (!savePath) {
@@ -821,7 +905,10 @@ const chooseLocalTargets = async (files: RemoteDirEntry[]): Promise<string[] | n
     try {
         dir = await open({ directory: true, multiple: false, title: "选择保存目录" });
     } catch (error: any) {
-        ElMessage.error("打开目录选择框失败：" + (error?.message ?? String(error)));
+        const errorText = error?.message ?? String(error);
+        console.error("打开目录选择框失败:", error);
+        printInfoLog(`打开目录选择框失败：${errorText}`, "log-error");
+        ElMessage.error("打开目录选择框失败：" + errorText);
         return null;
     }
     const targetDir = Array.isArray(dir) ? dir[0] : dir;
@@ -904,6 +991,13 @@ const runDownload = async (rows: RemoteDirEntry[]) => {
             failures.push(`${file.name}：${errorText}`);
             printInfoLog(`下载失败：${file.name}：${errorText}`, "log-error");
         }
+    } catch (error: any) {
+        // 代码本身抛异常（如监听器注册失败），逐条结果分支覆盖不到的兜底
+        const errorText = error?.message ?? String(error);
+        const fileName = downloadState.fileName || "未知文件";
+        failures.push(`${fileName}：${errorText}`);
+        console.error("下载异常:", error);
+        printInfoLog(`下载异常：${fileName}：${errorText}`, "log-error");
     } finally {
         downloading.value = false;
         terminating.value = false;
@@ -917,7 +1011,7 @@ const runDownload = async (rows: RemoteDirEntry[]) => {
     printInfoLog(`下载结束：${summary}`, failures.length > 0 || stopped ? "log-warning" : "log-success");
     if (failures.length > 0) {
         ElMessageBox.alert(
-            `${summary}<br/>${failures.slice(0, 20).join("<br/>")}` +
+            `${summary}<br/>${failures.slice(0, 20).map(escapeHtml).join("<br/>")}` +
                 (stopped ? "<br/>已终止，未下载完成的本地文件可能残留部分内容。" : ""),
             "下载结果",
             { confirmButtonText: "知道了", dangerouslyUseHTMLString: true }
@@ -941,7 +1035,7 @@ const runDelete = async (targetRows: RemoteDirEntry[]) => {
         return;
     }
 
-    const preview = rows.slice(0, 5).map((row) => row.name).join("、");
+    const preview = rows.slice(0, 5).map((row) => escapeHtml(row.name)).join("、");
     const tip = rows.length === 1
         ? `将删除 <b>${preview}</b>，<b>无法恢复</b>。`
         : `将删除 <b>${rows.length}</b> 项：${preview}${rows.length > 5 ? " 等" : ""}，<b>无法恢复</b>。`;
@@ -953,6 +1047,7 @@ const runDelete = async (targetRows: RemoteDirEntry[]) => {
             dangerouslyUseHTMLString: true,
         });
     } catch {
+        // 用户点「取消」时 ElMessageBox reject（非异常），不记录日志
         return;
     }
 
@@ -962,6 +1057,7 @@ const runDelete = async (targetRows: RemoteDirEntry[]) => {
 
     let successCount = 0;
     let stopped = false;
+    let currentTarget = "";
     const failures: string[] = [];
     printInfoLog(`开始删除：共 ${rows.length} 项`);
     try {
@@ -973,6 +1069,7 @@ const runDelete = async (targetRows: RemoteDirEntry[]) => {
             }
             // 用「所选路径 + 条目名」重建远端路径，避免直接使用 SFTP 返回的路径形态差异
             const target = joinRemotePath(base, row.name);
+            currentTarget = row.name;
             const result = await cmdInvoke<string>("execute_remote_command", {
                 ...serverArgs(),
                 command: buildRemoteDeleteCommand(Number(server.value?.os), target),
@@ -987,6 +1084,12 @@ const runDelete = async (targetRows: RemoteDirEntry[]) => {
                 printInfoLog(`删除失败：${row.name}：${output || "删除失败"}`, "log-error");
             }
         }
+    } catch (error: any) {
+        // 代码本身抛异常，逐条结果分支覆盖不到的兜底
+        const errorText = error?.message ?? String(error);
+        failures.push(`${currentTarget || "删除执行"}：${errorText}`);
+        console.error("删除异常:", error);
+        printInfoLog(`删除异常：${currentTarget || "未知条目"}：${errorText}`, "log-error");
     } finally {
         deleting.value = false;
         terminating.value = false;
@@ -996,7 +1099,7 @@ const runDelete = async (targetRows: RemoteDirEntry[]) => {
     const summary = `成功删除 ${successCount} 项，失败 ${failures.length} 项` + (stopped ? "（已终止）" : "");
     printInfoLog(`删除结束：${summary}`, failures.length > 0 || stopped ? "log-warning" : "log-success");
     if (failures.length > 0) {
-        ElMessageBox.alert(`${summary}<br/>${failures.slice(0, 20).join("<br/>")}`, "删除结果", {
+        ElMessageBox.alert(`${summary}<br/>${failures.slice(0, 20).map(escapeHtml).join("<br/>")}`, "删除结果", {
             confirmButtonText: "知道了",
             dangerouslyUseHTMLString: true,
         });
@@ -1025,12 +1128,31 @@ const onTerminate = async () => {
     else ElMessage.info("已发送终止请求，当前条目处理完后停止删除");
 };
 
-onUnmounted(() => {
-    unlistenProgress?.();
-    unlistenProgress = null;
+onMounted(async () => {
+    // 页签关闭前询问：上传/下载/删除/读取目录进行中不允许关闭
+    unregisterTabCloseGuard = registerTabCloseGuard({
+        match: (tab) =>
+            tab.path === FILE_MANAGE_PATH && String(tab.query?.serverId ?? "") === String(serverId),
+        blockReason: () => {
+            if (uploading.value) return "上传进行中，请先点击【终止操作】后再关闭页签";
+            if (downloading.value) return "下载进行中，请先点击【终止操作】后再关闭页签";
+            if (deleting.value) return "删除进行中，请先点击【终止操作】后再关闭页签";
+            if (loadingDir.value) return "正在读取远程目录，请先点击【终止操作】后再关闭页签";
+            return null;
+        },
+    });
+    initSession();
+    await loadServer();
 });
 
-defineExpose({ openDialog });
+onUnmounted(() => {
+    unregisterTabCloseGuard?.();
+    unregisterTabCloseGuard = null;
+    unlistenProgress?.();
+    unlistenProgress = null;
+    // 页签已关闭：复位后端取消标记，避免影响下一次打开
+    setFileCancel(false);
+});
 </script>
 
 <style lang="scss" scoped>
@@ -1038,13 +1160,39 @@ defineExpose({ openDialog });
 $log-console-bg: #545c64;
 $log-console-text: #ffffff;
 
+.server-file-page {
+    :deep(.el-card__body) {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    /* 卡片撑满内容区（layout-padding-auto 只给了 flex 布局，这里确保高度不塌） */
+    .server-file-card {
+        flex: 1;
+        min-height: 0;
+    }
+}
+
+.page-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    .page-title {
+        font-weight: 600;
+        word-break: break-all;
+    }
+}
+
 .server-file {
     display: flex;
     flex-direction: column;
+    flex: 1;
     height: 100%;
     min-height: 320px;
-    /* 项目内 .el-dialog__body 全局去掉了 padding（serverDialog 的全局样式），这里自行补边距 */
-    padding: 6px 12px 0;
 }
 
 .server-file-form {
@@ -1130,7 +1278,7 @@ $log-console-text: #ffffff;
     }
 }
 
-/* 页签占满弹窗剩余高度，表格在页签内部滚动 */
+/* 页签占满剩余高度，表格在页签内部滚动 */
 .server-file-tabs {
     flex: 1;
     display: flex;
@@ -1212,11 +1360,13 @@ $log-console-text: #ffffff;
     }
 }
 
-.dialog-footer {
+.page-footer {
     display: flex;
     align-items: center;
     justify-content: flex-end;
     gap: 10px;
+    flex: 0 0 auto;
+    padding-top: 8px;
 }
 
 .footer-hint {
@@ -1298,30 +1448,6 @@ $log-console-text: #ffffff;
         .log-success {
             color: var(--el-color-success);
         }
-    }
-}
-</style>
-
-<style lang="scss">
-/* 文件管理弹窗高度约束：modal-class 挂在遮罩层上，需用全局样式匹配（不能 scoped） */
-.server-file-dialog {
-    .el-dialog {
-        display: flex;
-        flex-direction: column;
-        height: 90vh;
-        max-height: 90vh;
-        /* 固定 90vh + top 5vh：去掉默认 50px 下边距，避免遮罩层出现滚动条 */
-        margin-bottom: 0;
-    }
-
-    .el-dialog__body {
-        flex: 1;
-        min-height: 0;
-        overflow: hidden;
-    }
-
-    .el-dialog__footer {
-        flex: 0 0 auto;
     }
 }
 </style>

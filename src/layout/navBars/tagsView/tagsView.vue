@@ -89,6 +89,7 @@ import { Session } from "@/utils/storage";
 import { isObjectValueEqual } from "@/utils/arrayOperation";
 import other from "@/utils/other";
 import mittBus from "@/utils/mitt";
+import { getTabCloseBlockReason } from "@/utils/tabCloseGuard";
 
 // 引入组件
 const Contextmenu = defineAsyncComponent(
@@ -294,7 +295,18 @@ const refreshCurrentTagsView = async (fullPath: string) => {
   if (item.meta?.isKeepAlive) storesKeepALiveNames.addCachedView(item);
 };
 // 3、关闭当前 tagsView：如果是设置了固定的（isAffix），不可以关闭
+// 关闭前询问页面注册的守卫（如服务器文件管理正在上传/下载/读取），被拦截时提示原因并放弃关闭
+const canCloseTab = (tab: RouteItem): boolean => {
+  const reason = getTabCloseBlockReason(tab);
+  if (!reason) return true;
+  ElMessage.warning(reason);
+  return false;
+};
 const closeCurrentTagsView = (path: string) => {
+  const target = state.tagsViewList.find((v: RouteItem) =>
+    getThemeConfig.value.isShareTagsView ? v.path === path : v.url === path
+  );
+  if (target && !target.meta?.isAffix && !canCloseTab(target)) return false;
   state.tagsViewList.map((v: RouteItem, k: number, arr: RouteItems) => {
     if (!v.meta?.isAffix) {
       if (getThemeConfig.value.isShareTagsView ? v.path === path : v.url === path) {
@@ -348,9 +360,19 @@ const closeCurrentTagsView = (path: string) => {
   });
   addBrowserSetSession(state.tagsViewList);
 };
+// 页签身份与关闭逻辑保持一致：共享模式按 path；非共享模式按 path + query（同一 path 不同 query 是不同页签）
+const isCurrentTab = (v: RouteItem, path: string): boolean => {
+  if (getThemeConfig.value.isShareTagsView) return v.path === path;
+  return v.path === route.path && isObjectValueEqual(v.query ?? {}, route.query ?? {});
+};
 // 4、关闭其它 tagsView：如果是设置了固定的（isAffix），不进行关闭
 const closeOtherTagsView = (path: string) => {
   if (Session.get("tagsViewList")) {
+    // 只要有任一带守卫的页签拒绝关闭，整体放弃（避免半截状态）
+    const blocked = state.tagsViewList.find(
+      (v: RouteItem) => !v.meta?.isAffix && !isCurrentTab(v, path) && getTabCloseBlockReason(v)
+    );
+    if (blocked && !canCloseTab(blocked)) return;
     state.tagsViewList = [];
     Session.get("tagsViewList").map((v: RouteItem) => {
       if (v.meta?.isAffix && !v.meta.isHide) {
@@ -366,6 +388,11 @@ const closeOtherTagsView = (path: string) => {
 // 5、关闭全部 tagsView：如果是设置了固定的（isAffix），不进行关闭
 const closeAllTagsView = () => {
   if (Session.get("tagsViewList")) {
+    // 同上：任一带守卫的页签拒绝关闭则整体放弃
+    const blocked = state.tagsViewList.find(
+      (v: RouteItem) => !v.meta?.isAffix && getTabCloseBlockReason(v)
+    );
+    if (blocked && !canCloseTab(blocked)) return;
     storesKeepALiveNames.delAllCachedViews();
     state.tagsViewList = [];
     Session.get("tagsViewList").map((v: RouteItem) => {

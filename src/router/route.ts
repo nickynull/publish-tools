@@ -170,6 +170,23 @@ export const dynamicRoutes: Array<RouteRecordRaw> = [
 				children: []
 			},
 			{
+				// 服务器【文件管理】：由列表跳转打开的页签页面（按 query.serverId 定位页签），菜单中隐藏
+				path: '/server/file',
+				name: 'serverFile',
+				component: () => import('@/views/servers/fileManage/index.vue'),
+				meta: {
+					title: 'message.router.serverFileManage',
+					isLink: '',
+					isHide: true,
+					isKeepAlive: true,
+					isAffix: false,
+					isIframe: false,
+					icon: 'smom-icon smom-icon-fuwuqi'
+				},
+				redirect: "",
+				children: []
+			},
+			{
 				path: '/tfs',
 				name: 'teamFoundationServer',
 				component: () => import('@/views/teamFoundationServer/index.vue'),

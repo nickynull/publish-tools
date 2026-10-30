@@ -8,6 +8,7 @@ export default {
 		projectManage: '項目管理',
 		appconfig: '應用配置',
 		server: '服務器',
+		serverFileManage: '檔案管理',
 		sshInstall: 'SSH安裝說明',
 		backups: '備份記録',
 		settings: '設定',

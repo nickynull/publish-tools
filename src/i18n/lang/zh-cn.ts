@@ -8,6 +8,7 @@ export default {
 		projectManage: '项目管理',
 		appconfig: '应用配置',
 		server: '服务器',
+		serverFileManage: '文件管理',
 		sshInstall: 'SSH安装说明',
 		backups: '备份记录',
 		settings: '设置',

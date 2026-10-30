@@ -168,7 +168,6 @@
     </el-card>
     <server-dialog ref="serverDialogRef" @refresh="getTableData()" />
     <server-log-dialog ref="serverLogDialogRef" />
-    <server-file-dialog ref="serverFileDialogRef" />
 
     <!-- 服务发现结果抽屉 -->
     <el-drawer
@@ -279,12 +278,16 @@ import {
   type ServerLogType,
 } from "@/utils/serverLog";
 import { useServiceDiscovery } from "@/composables/useServiceDiscovery";
+import { Session } from "@/utils/storage";
 import { syncServersFromSshMcp, getUnmanagedServerCount, type SshMcpSyncResult } from "@/database/servers/sshMcpSync";
 import { loadPublishSettings } from "@/utils/publishSettings";
 
 // 引入服务器数据库
 const serverDb = useServerDb();
 const projectDb = useProjectDb();
+
+/** 文件管理页签的路由路径（与 route.ts 的 /server/file 一致） */
+const FILE_MANAGE_PATH = "/server/file";
 
 // 引入组件
 const router = useRouter();
@@ -295,10 +298,6 @@ const ServerDialog = defineAsyncComponent(
 const serverLogDialogRef = ref();
 const ServerLogDialog = defineAsyncComponent(
   () => import("@/views/servers/components/serverLogDialog.vue")
-);
-const serverFileDialogRef = ref();
-const ServerFileDialog = defineAsyncComponent(
-  () => import("@/views/servers/components/serverFileDialog.vue")
 );
 
 // 项目信息
@@ -575,9 +574,24 @@ const onViewLog = (row: RowServerType) => {
   serverLogDialogRef.value?.openDialog(row);
 };
 
-// 文件管理：打开上传/浏览弹窗（候选路径取自服务器的「文件管理路径」配置）
+// 文件管理：打开该服务器的文件管理页签（候选路径取自服务器的「文件管理路径」配置）
+// 页签身份 = 路由 /server/file + query.serverId；同一台服务器只保留一个页签
 const onOpenFileManage = (row: RowServerType) => {
-  serverFileDialogRef.value?.openDialog(row);
+  const serverId = String(row.id ?? "");
+  if (!serverId) {
+    ElMessage.warning("该服务器缺少 ID，无法打开文件管理");
+    return;
+  }
+  // 已有该服务器的页签则沿用其 query（服务器改过名也不新开，保证「一台服务器一个页签」）
+  const cachedTabs = Session.get("tagsViewList");
+  const existTab = Array.isArray(cachedTabs)
+    ? cachedTabs.find(
+        (item: any) =>
+          item?.path === FILE_MANAGE_PATH && String(item?.query?.serverId ?? "") === serverId
+      )
+    : undefined;
+  const query = existTab?.query ?? { serverId, tagsViewName: `文件管理 - ${row.name}` };
+  router.push({ path: FILE_MANAGE_PATH, query });
 };
 
 // 下载日志：选择本地保存路径后通过 SFTP 下载

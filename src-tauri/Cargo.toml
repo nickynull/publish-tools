@@ -1,6 +1,6 @@
 [package]
 name = "SmomPublish"
-version = "1.5.5"
+version = "1.5.6"
 description = "SMOM平台发布工具"
 authors = ["Rex"]
 edition = "2021"

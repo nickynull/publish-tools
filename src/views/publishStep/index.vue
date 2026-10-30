@@ -396,7 +396,8 @@
         <el-dialog v-model="stagingVisible" :title="stagingTitle" width="1080px" draggable>
             <el-alert v-if="stagingErrorMsg" :title="stagingErrorMsg" type="warning" show-icon :closable="false"
                 style="margin-bottom: 10px" />
-            <el-table :data="stagingRows" size="default" border v-loading="stagingLoading" class="staging-table">
+            <el-table :data="stagingDisplayRows" size="default" border v-loading="stagingLoading"
+                class="staging-table" :span-method="stagingSpanMethod">
                 <el-table-column type="index" label="序号" width="60" />
                 <el-table-column prop="serverName" label="服务器" min-width="130" />
                 <el-table-column prop="moduleName" label="模块目录" min-width="130" />
@@ -424,7 +425,8 @@
                 </span>
             </div>
             <el-table :data="checkDisplayRows" size="default" border v-loading="checkLoading" class="staging-table"
-                :row-key="(row: AssemblyDiffRow) => `${row.serverId}-${row.moduleName}`">
+                :row-key="(row: AssemblyDiffRow) => `${row.serverId}-${row.moduleName}`"
+                :span-method="checkSpanMethod">
                 <el-table-column type="expand">
                     <template #default="{ row }">
                         <div class="check-detail" v-if="row.details.length > 0">
@@ -465,7 +467,8 @@
         <el-dialog v-model="backupVisible" title="服务备份" width="1080px" draggable>
             <el-alert v-if="backupErrorMsg" :title="backupErrorMsg" type="warning" show-icon :closable="false"
                 style="margin-bottom: 10px" />
-            <el-table :data="backupRows" size="default" border v-loading="backupLoading" class="staging-table">
+            <el-table :data="backupDisplayRows" size="default" border v-loading="backupLoading"
+                class="staging-table" :span-method="backupSpanMethod">
                 <el-table-column type="index" label="序号" width="60" />
                 <el-table-column prop="serverName" label="服务器" min-width="110" />
                 <el-table-column prop="backupDate" label="文件夹名称" min-width="110" />
@@ -1347,6 +1350,41 @@ const onShowServiceStatus = async (index: number) => {
     }
 };
 
+// 平铺表格按服务器合并展示：同服务器行保持相邻（稳定重排，组间按首次出现顺序），
+// 「服务器」列用 el-table 的 span-method 合并单元格，替代逐行重复的服务器名
+const contiguousByServer = <T extends { serverName: string }>(rows: T[]): T[] => {
+    const map = new Map<string, T[]>();
+    for (const row of rows) {
+        const list = map.get(row.serverName);
+        if (list) list.push(row);
+        else map.set(row.serverName, [row]);
+    }
+    const out: T[] = [];
+    for (const list of map.values()) out.push(...list);
+    return out;
+};
+// 生成「服务器」列合并的 span-method：组首行 rowspan = 组内行数，组内其余行 0/0；其他列走默认渲染
+const serverSpanMethod = <T extends { serverName: string }>(rows: T[]) => {
+    const firstIndex = new Map<string, number>();
+    const rowspanByIndex = new Map<number, number>();
+    rows.forEach((row, index) => {
+        const name = row.serverName;
+        if (!firstIndex.has(name)) {
+            firstIndex.set(name, index);
+            rowspanByIndex.set(index, 1);
+        } else {
+            const first = firstIndex.get(name)!;
+            rowspanByIndex.set(first, (rowspanByIndex.get(first) || 1) + 1);
+        }
+    });
+    return ({ row, rowIndex, column }: { row: T; rowIndex: number; column: { property?: string } }) => {
+        if (column.property !== "serverName") return;
+        const first = firstIndex.get(row.serverName);
+        if (first === undefined || first !== rowIndex) return { rowspan: 0, colspan: 0 };
+        return { rowspan: rowspanByIndex.get(rowIndex) || 1, colspan: 1 };
+    };
+};
+
 // 查看程序集信息（服务端程序集 / 本机程序集共用对话框）
 const stagingVisible = ref(false);
 const stagingLoading = ref(false);
@@ -1383,6 +1421,9 @@ const onShowAssemblyInfo = async (index: number, source: "server" | "local") => 
         state.funModule[index].loading = false;
     }
 };
+// 展示行：同服务器行保持相邻；span-method 随展示行重新计算
+const stagingDisplayRows = computed(() => contiguousByServer(stagingRows.value));
+const stagingSpanMethod = computed(() => serverSpanMethod(stagingDisplayRows.value));
 
 // 核对程序集（以本机为准，逐文件比对各服务器暂存程序集修改时间）
 const checkVisible = ref(false);
@@ -1390,10 +1431,13 @@ const checkLoading = ref(false);
 const checkRows = ref<AssemblyDiffRow[]>([]);
 const checkErrorMsg = ref("");
 const checkOnlyDiff = ref(true);
-// 仅看差异：过滤掉一致的行（差异合计含缺失/时间不一致/服务器多出）
+// 仅看差异：过滤掉一致的行（差异合计含缺失/时间不一致/服务器多出），并保证同服务器行相邻
 const checkDisplayRows = computed(() =>
-    checkOnlyDiff.value ? checkRows.value.filter((row) => !row.consistent) : checkRows.value
+    contiguousByServer(
+        checkOnlyDiff.value ? checkRows.value.filter((row) => !row.consistent) : checkRows.value
+    )
 );
+const checkSpanMethod = computed(() => serverSpanMethod(checkDisplayRows.value));
 const checkDiffText = (type: string) =>
     type === "missing" ? "缺失" : type === "timeDiff" ? "时间不一致" : "服务器多出";
 const checkDiffTagType = (type: string) =>
@@ -1431,6 +1475,9 @@ const backupVisible = ref(false);
 const backupLoading = ref(false);
 const backupRows = ref<ServiceBackupRow[]>([]);
 const backupErrorMsg = ref("");
+// 展示行：同服务器行保持相邻；span-method 随展示行重新计算
+const backupDisplayRows = computed(() => contiguousByServer(backupRows.value));
+const backupSpanMethod = computed(() => serverSpanMethod(backupDisplayRows.value));
 const backupDeleting = ref(false);
 const onDeleteServiceBackup = async (row: ServiceBackupRow) => {
     try {

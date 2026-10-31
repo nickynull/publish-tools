@@ -936,7 +936,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 
 	/**
 	 * 打包wpf：根据配置，获取服务器上的配置文件(Manifest.xml)、压缩包后更新并打包（只打包到本地，不上传）
-	 * 产出目录：程序集输出路径/WpfClient/packOutput/
+	 * 产出目录：程序集输出路径/WpfClient/packOutput/<服务器id>/（按服务器区分，多服务器互不覆盖）
 	 */
 	const packWpfClient = async () => {
 		resetStopState();
@@ -1013,8 +1013,8 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 				printInfoLog(`服务器：${wpfServer.name}（${displayOs(Number(serverInfo.os))} ${serverAddress}）`);
 				const serverStartTime = Date.now();
 
-				// 本地打包输出目录
-				const packDir = `${ctx.assemblyOutPath()}/${MODULE_NAMES.wpfClient}/packOutput`;
+				// 本地打包输出目录（按服务器 id 区分：packOutput/<服务器id>，多服务器互不覆盖）
+				const packDir = `${ctx.assemblyOutPath()}/${MODULE_NAMES.wpfClient}/packOutput/${Number(wpfServer.id)}`;
 				printInfoLog(`步骤 1/4：准备本地打包目录：${packDir}`);
 				const prepStartTime = Date.now();
 				const packDirExists = await cmdInvoke("exists", { path: packDir });
@@ -1568,10 +1568,10 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 					const prepared: { module: StepModule; localDir: string; files: string[] }[] = [];
 					for (const target of group.modules) {
 						if (checkStop()) return false;
-						// WpfClient 从打包产出目录上传；其余模块从程序集输出目录上传
+						// WpfClient 从打包产出目录（packOutput/<服务器id>）上传；其余模块从程序集输出目录上传
 						const localDir =
 							target.module.name === MODULE_NAMES.wpfClient
-								? `${removeSlash(String(ctx.assemblyOutPath()))}/${MODULE_NAMES.wpfClient}/packOutput`
+								? `${removeSlash(String(ctx.assemblyOutPath()))}/${MODULE_NAMES.wpfClient}/packOutput/${group.serverId}`
 								: `${removeSlash(String(ctx.assemblyOutPath()))}/${target.module.name}`;
 						const localDirExists = await cmdInvoke("exists", { path: localDir });
 						if (localDirExists.code !== 0) {
@@ -2263,10 +2263,10 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			for (const module of modules) {
 				if (!module.serverArr.some((s) => Number(s.id) === serverId)) continue;
 
-				// 本地子清单前缀：WpfClient 为打包产出目录 packOutput，其余为模块目录
+				// 本地子清单前缀：WpfClient 为打包产出目录 packOutput/<服务器id>，其余为模块目录
 				const localPrefix =
 					module.name === MODULE_NAMES.wpfClient
-						? `${MODULE_NAMES.wpfClient}/packOutput/`
+						? `${MODULE_NAMES.wpfClient}/packOutput/${serverId}/`
 						: `${module.name}/`;
 				const localFiles = new Map<string, number>();
 				for (const [file, seconds] of localMap) {
@@ -2318,11 +2318,17 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 					}
 				}
 				// 服务器多出文件（本地已无）：同样视为差异，计入差异合计
+				// 服务器侧修改时间照常输出，便于判断这个残留文件是哪一次上传留下的
 				let extraCount = 0;
-				for (const file of serverFiles.keys()) {
+				for (const [file, serverSeconds] of serverFiles) {
 					if (!localFiles.has(file)) {
 						extraCount++;
-						details.push({ type: "extra", file, localTime: "—", serverTime: "—（本地无此文件）" });
+						details.push({
+							type: "extra",
+							file,
+							localTime: "—（本地无此文件）",
+							serverTime: formatEpochSeconds(serverSeconds),
+						});
 					}
 				}
 				details.sort((a, b) => {

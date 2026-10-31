@@ -274,6 +274,7 @@ const state = reactive<FormDialogType<RowAppconfigType>>({
     projectName: null,
     environment: 1,
     msBuildPath: null,
+    solutionPath: null,
     dllMode: "全部",
     dllModeValue: null,
     buildMode: "Debug",

@@ -7,7 +7,7 @@ use crate::utils::compression::{
     copy_with_progress, create_zip, scan_zip_sources, unzip_files, with_mtime,
 };
 use crate::utils::progress::ProgressState;
-use crate::utils::msbuild::build_project;
+use crate::utils::msbuild::{build_project, build_solution};
 use chrono::{DateTime, Local, NaiveDateTime};
 use encoding_rs::GBK;
 use encoding_rs::UTF_8;
@@ -289,6 +289,34 @@ pub async fn build_project_release(
     build_mode: &str,
 ) -> Result<bool, String> {
     match build_project(project_file_path, msbuild_path, is_rebuild, build_mode) {
+        Ok(_) => Ok(true),
+        Err(e) => Err(e),
+    }
+}
+
+/// 编译解决方案（项目发布 STEP【编译解决方案】使用）
+///
+/// 一次 MSBuild 调用编译整个 .sln，而非逐个 csproj 编译；编译期间可被发布停止标记中断。
+///
+/// # Arguments
+/// * `solution_path` - 解决方案文件路径（.sln）
+/// * `msbuild_path` - MSBuild 编译路径
+/// * `is_rebuild` - 是否重新编译（Rebuild / Build）
+/// * `build_mode` - 生成模式（Release / Debug）
+/// * `platform` - 平台（Any CPU / x64 / x86），留空则不传
+///
+/// # Returns
+/// * `Ok(true)` 成功
+/// * `Err(String)` 失败，返回错误行（被手动停止时为「已手动停止」）
+#[tauri::command]
+pub async fn build_solution_release(
+    solution_path: &str,
+    msbuild_path: &str,
+    is_rebuild: bool,
+    build_mode: &str,
+    platform: &str,
+) -> Result<bool, String> {
+    match build_solution(solution_path, msbuild_path, is_rebuild, build_mode, platform) {
         Ok(_) => Ok(true),
         Err(e) => Err(e),
     }
@@ -2168,50 +2196,6 @@ async fn exec_local_command_with_working_dir(
             }
         }
     }
-}
-
-/// 在独立命令行窗口中执行本地脚本（.bat / .cmd），不等待脚本结束
-///
-/// 脚本内部通常带 `pause` 且 msbuild 生成耗时较长：若在当前进程捕获输出会一直卡在
-/// `pause` 上，因此用 `CREATE_NEW_CONSOLE` 起一个独立控制台窗口执行，由用户直接查看
-/// 生成进度；行为与双击 bat 一致（脚本结束、pause 回车后窗口自动关闭）。
-///
-/// # Arguments
-/// * `path` - 脚本全路径
-///
-/// # Returns
-/// * `Ok(true)` 已启动
-/// * `Err(String)` 失败
-#[tauri::command]
-pub async fn run_local_script(path: &str) -> Result<bool, String> {
-    let script = Path::new(path);
-    if !script.is_file() {
-        return Err(format!("脚本不存在：{}", path));
-    }
-    let is_script = script
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.eq_ignore_ascii_case("bat") || ext.eq_ignore_ascii_case("cmd"))
-        .unwrap_or(false);
-    if !is_script {
-        return Err("仅支持执行 .bat / .cmd 脚本".to_string());
-    }
-
-    // 工作目录取脚本所在目录：脚本内部虽有 cd，但启动位置与双击脚本保持一致
-    let working_dir = script
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| PathBuf::from("."));
-
-    // cmd /c "脚本路径"：路径含空格时由标准库自动加引号
-    Command::new("cmd")
-        .args(["/c", path])
-        .current_dir(working_dir)
-        .creation_flags(0x00000010) // CREATE_NEW_CONSOLE：独立可见的控制台窗口
-        .spawn()
-        .map_err(|e| format!("无法执行脚本: {}", e))?;
-
-    Ok(true)
 }
 
 /// 读取目录中的所有DLL文件

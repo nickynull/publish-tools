@@ -29,6 +29,7 @@ async function ensureSchema(database: Database) {
         project_id INTEGER,
         environment INTEGER,
         ms_build_path TEXT,
+        solution_path TEXT,
         dll_mode TEXT,
         dll_mode_value TEXT,
         config_items_json TEXT,
@@ -131,10 +132,14 @@ async function ensureSchema(database: Database) {
 )`);
 
     // ========== 改表（已有表加字段，先检查是否存在） ==========
-    const columns = await database.select<{ name: string }[]>("PRAGMA table_info(t_app_config)");
+    const columns = await database.select<{ name: string }[]>(`PRAGMA table_info(t_app_config)`);
     const hasBuildMode = columns.some((column) => column.name === "build_mode");
     if (!hasBuildMode) {
         await database.execute("ALTER TABLE t_app_config ADD COLUMN build_mode TEXT DEFAULT 'Debug'");
+    }
+    // 应用配置加解决方案路径（.sln，STEP 编译解决方案用）
+    if (!columns.some((column) => column.name === "solution_path")) {
+        await database.execute("ALTER TABLE t_app_config ADD COLUMN solution_path TEXT");
     }
 
     // t_server 加 SSH MCP 同步来源键（项目/环境/主机），有值 = 已纳管由远端管理，NULL = 本地自建

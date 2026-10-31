@@ -9,7 +9,7 @@ export function useAppconfigDb() {
          * @returns { any }
          */
         getAppconfigList: async (params: GetAppconfigTableParams) => {
-            let dataSql = "select ta.id, ta.project_id projectId, tp.name projectName, ta.environment, ta.ms_build_path msBuildPath, ta.dll_mode dllMode, ta.dll_mode_value dllModeValue, ta.build_mode buildMode, ta.config_items_json configItemsJson from t_app_config ta left join t_project tp on ta.project_id = tp.id";
+            let dataSql = "select ta.id, ta.project_id projectId, tp.name projectName, ta.environment, ta.ms_build_path msBuildPath, ta.solution_path solutionPath, ta.dll_mode dllMode, ta.dll_mode_value dllModeValue, ta.build_mode buildMode, ta.config_items_json configItemsJson from t_app_config ta left join t_project tp on ta.project_id = tp.id";
             let totalSql = "select count(*) totalCount from t_app_config ta";
             let where = " where 1=1 ";
             let orderBy = "";
@@ -57,7 +57,7 @@ export function useAppconfigDb() {
          * @param appconfigId 配置ID
          */
         getAppconfigById: async (appconfigId: number) => {
-            let dataSql = "select ta.id, ta.project_id projectId, tp.name projectName, ta.environment, ta.ms_build_path msBuildPath, ta.dll_mode dllMode, ta.dll_mode_value dllModeValue, ta.build_mode buildMode, ta.config_items_json configItemsJson from t_app_config ta left join t_project tp on ta.project_id = tp.id where ta.id = $1 ";
+            let dataSql = "select ta.id, ta.project_id projectId, tp.name projectName, ta.environment, ta.ms_build_path msBuildPath, ta.solution_path solutionPath, ta.dll_mode dllMode, ta.dll_mode_value dllModeValue, ta.build_mode buildMode, ta.config_items_json configItemsJson from t_app_config ta left join t_project tp on ta.project_id = tp.id where ta.id = $1 ";
 
             // 定义(默认)响应结果
             let dataResult: DataResultType<TableResultType<RowAppconfigType>> = {
@@ -92,7 +92,7 @@ export function useAppconfigDb() {
          * @param environment 环境变量
          */
         getPublishAppconfigs: async (projectId: number, environment: number) => {
-            let dataSql = "select ta.id, ta.project_id projectId, tp.name projectName, ta.environment, ta.ms_build_path msBuildPath, ta.dll_mode dllMode, ta.dll_mode_value dllModeValue, ta.build_mode buildMode, ta.config_items_json configItemsJson from t_app_config ta left join t_project tp on ta.project_id = tp.id";
+            let dataSql = "select ta.id, ta.project_id projectId, tp.name projectName, ta.environment, ta.ms_build_path msBuildPath, ta.solution_path solutionPath, ta.dll_mode dllMode, ta.dll_mode_value dllModeValue, ta.build_mode buildMode, ta.config_items_json configItemsJson from t_app_config ta left join t_project tp on ta.project_id = tp.id";
             let where = " where ta.project_id = $1 and ta.environment = $2";
             dataSql += where;
 
@@ -129,7 +129,7 @@ export function useAppconfigDb() {
          * @param appconfig 应用配置
          */
         insertAppconfig: async (appconfig: RowAppconfigType) => {
-            let insertSql = "INSERT INTO t_app_config (project_id, environment, ms_build_path, dll_mode, dll_mode_value, build_mode, config_items_json) VALUES($1, $2, $3, $4, $5, $6, $7) RETURNING id;";
+            let insertSql = "INSERT INTO t_app_config (project_id, environment, ms_build_path, solution_path, dll_mode, dll_mode_value, build_mode, config_items_json) VALUES($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id;";
             // 定义(默认)响应结果
             let dataResult: DataResultType<number> = {
                 code: 1,
@@ -150,7 +150,7 @@ export function useAppconfigDb() {
                     return dataResult;
                 }
 
-                let rowResult = await (await db()).execute(insertSql, [appconfig.projectId, appconfig.environment, appconfig.msBuildPath, appconfig.dllMode, appconfig.dllModeValue, appconfig.buildMode || 'Debug', appconfig.configItemsJson]);
+                let rowResult = await (await db()).execute(insertSql, [appconfig.projectId, appconfig.environment, appconfig.msBuildPath, appconfig.solutionPath ?? null, appconfig.dllMode, appconfig.dllModeValue, appconfig.buildMode || 'Debug', appconfig.configItemsJson]);
                 if (rowResult.lastInsertId && rowResult.lastInsertId > 0) {
                     dataResult.code = 0;
                     dataResult.data = rowResult.lastInsertId;
@@ -172,7 +172,7 @@ export function useAppconfigDb() {
          * @param appconfig 应用配置
          */
         updateAppconfig: async (appconfig: RowAppconfigType) => {
-            let updateSql = "UPDATE t_app_config SET project_id=$1, environment=$2, ms_build_path=$3, dll_mode=$4, dll_mode_value=$5, build_mode=$6, config_items_json=$7 WHERE id=$8;";
+            let updateSql = "UPDATE t_app_config SET project_id=$1, environment=$2, ms_build_path=$3, solution_path=$4, dll_mode=$5, dll_mode_value=$6, build_mode=$7, config_items_json=$8 WHERE id=$9;";
 
             // 定义(默认)响应结果
             let dataResult: DataResultType<boolean> = {
@@ -194,7 +194,7 @@ export function useAppconfigDb() {
                     return dataResult;
                 }
 
-                let rowResult = await (await db()).execute(updateSql, [appconfig.projectId, appconfig.environment, appconfig.msBuildPath, appconfig.dllMode, appconfig.dllModeValue, appconfig.buildMode || 'Debug', appconfig.configItemsJson, appconfig.id]);
+                let rowResult = await (await db()).execute(updateSql, [appconfig.projectId, appconfig.environment, appconfig.msBuildPath, appconfig.solutionPath ?? null, appconfig.dllMode, appconfig.dllModeValue, appconfig.buildMode || 'Debug', appconfig.configItemsJson, appconfig.id]);
                 if (rowResult.rowsAffected > 0) {
                     dataResult.code = 0;
                     dataResult.data = true;
@@ -207,6 +207,74 @@ export function useAppconfigDb() {
             } catch (error) {
                 dataResult.code = -1;
                 dataResult.msg = "修改应用配置信息出错：" + JSON.stringify(error);
+                console.error(error);
+            }
+            return dataResult;
+        },
+
+        /**
+         * 修改应用配置的功能项配置（configItems，STEP 发布信息卡开关调整后实时落库）
+         * @param id 应用配置ID
+         * @param configItems 功能项配置对象（内部序列化为 JSON 存储）
+         */
+        updateAppconfigConfigItems: async (id: number, configItems: ConfigItemsType) => {
+            let updateSql = "UPDATE t_app_config SET config_items_json=$1 WHERE id=$2;";
+            // 定义(默认)响应结果
+            let dataResult: DataResultType<boolean> = {
+                code: 1,
+                msg: "",
+                data: false,
+            };
+            try {
+                let rowResult = await (
+                    await db()
+                ).execute(updateSql, [JSON.stringify(configItems), id]);
+                if (rowResult.rowsAffected > 0) {
+                    dataResult.code = 0;
+                    dataResult.data = true;
+                    dataResult.msg = "修改应用配置功能项成功！";
+                } else {
+                    dataResult.code = 1;
+                    dataResult.data = false;
+                    dataResult.msg = "修改应用配置功能项失败！";
+                }
+            } catch (error) {
+                dataResult.code = -1;
+                dataResult.msg = "修改应用配置功能项出错：" + JSON.stringify(error);
+                console.error(error);
+            }
+            return dataResult;
+        },
+
+        /**
+         * 修改应用配置的解决方案路径（STEP 发布信息卡调整后实时落库）
+         * @param id 应用配置ID
+         * @param solutionPath 解决方案路径（null/空串表示清除）
+         */
+        updateAppconfigSolutionPath: async (id: number, solutionPath: string | null) => {
+            let updateSql = "UPDATE t_app_config SET solution_path=$1 WHERE id=$2;";
+            // 定义(默认)响应结果
+            let dataResult: DataResultType<boolean> = {
+                code: 1,
+                msg: "",
+                data: false,
+            };
+            try {
+                let rowResult = await (
+                    await db()
+                ).execute(updateSql, [solutionPath ?? null, id]);
+                if (rowResult.rowsAffected > 0) {
+                    dataResult.code = 0;
+                    dataResult.data = true;
+                    dataResult.msg = "修改应用配置解决方案路径成功！";
+                } else {
+                    dataResult.code = 1;
+                    dataResult.data = false;
+                    dataResult.msg = "修改应用配置解决方案路径失败！";
+                }
+            } catch (error) {
+                dataResult.code = -1;
+                dataResult.msg = "修改应用配置解决方案路径出错：" + JSON.stringify(error);
                 console.error(error);
             }
             return dataResult;

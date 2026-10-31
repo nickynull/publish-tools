@@ -93,7 +93,7 @@
       >
         <el-table-column type="selection" width="50" />
         <el-table-column fixed type="index" label="序号" width="60" />
-        <el-table-column prop="projectName" label="项目名称" width="200" />
+        <el-table-column prop="projectName" label="项目名称" width="160" />
         <el-table-column prop="environment" label="环境" width="90">
           <template #default="scope">
             {{ displayEnvironment(scope.row.environment) }}
@@ -102,7 +102,7 @@
         <el-table-column
           prop="dllMode"
           label="获取dll方式"
-          min-width="100"
+          width="120"
           show-overflow-tooltip
         />
         <el-table-column
@@ -112,8 +112,8 @@
           show-overflow-tooltip
         />
         <el-table-column
-          prop="msBuildPath"
-          label="MsBuild路径"
+          prop="solutionPath"
+          label="解决方案路径"
           min-width="240"
           show-overflow-tooltip
         />

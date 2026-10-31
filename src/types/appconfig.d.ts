@@ -72,6 +72,7 @@ declare type RowAppconfigType = {
 	projectName: string | null;
 	environment: number | null;
 	msBuildPath: string | null;
+	solutionPath: string | null;
 	dllMode: string | null;
 	dllModeValue: string | null;
 	buildMode: string | null;

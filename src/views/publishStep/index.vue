@@ -81,22 +81,12 @@
                                     <el-radio border :value="4">Other</el-radio>
                                 </el-radio-group>
                             </div>
-                            <!-- 生成DLL脚本：路径按「项目 + 环境」关联，保存在本机（localStorage） -->
-                            <div class="project-select-row project-dll-script-row">
-                                <div class="project-select-label">生成DLL脚本</div>
-                                <div class="dll-script-box">
-                                    <a v-if="dllScriptPath" class="t-link-path dll-script-path"
-                                        href="javascript:void(0);" :title="`打开脚本所在目录：${dllScriptPath}`"
-                                        @click="onOpenDllScriptDir">{{ dllScriptPath }}</a>
-                                    <span v-else class="dll-script-empty">未关联（点【选择】指定 bat 脚本，按 项目 + 环境 记忆）</span>
-                                    <el-button size="small" :icon="FolderOpened" :disabled="isAnyLoading"
-                                        title="选择生成DLL脚本（.bat / .cmd）" @click="onSelectDllScript">选择</el-button>
-                                    <el-button size="small" type="primary" :icon="VideoPlay" :disabled="!dllScriptPath || isAnyLoading"
-                                        title="在新的命令行窗口中执行该脚本" @click="onRunDllScript">执行</el-button>
-                                    <el-button v-if="dllScriptPath" size="small" type="info" :icon="Delete" text
-                                        title="清除当前 项目 + 环境 的脚本关联" @click="onClearDllScript" />
-                                </div>
-                            </div>
+                            <!-- 编译解决方案：路径来自应用配置（调整实时落库），编译配置下拉与「拉取最新代码」开关在第二行 -->
+                            <CompileSolutionBar :solution-path="appconfigSolutionPath" :config="compileConfig"
+                                :disabled="isAnyLoading" :pull-latest="pullLatestEnabled"
+                                :pull-latest-available="hasAppconfig" @change="stepCompileApi.setConfig"
+                                @change-solution="onUpdateSolutionPath"
+                                @change-pull-latest="pullLatestEnabled = $event" />
                         </div>
 
                         <div class="card-item-appconfig">
@@ -424,9 +414,9 @@
                     {{checkRows.filter((row) => !row.consistent).length}} 项
                 </span>
             </div>
-            <el-table :data="checkDisplayRows" size="default" border v-loading="checkLoading" class="staging-table"
-                :row-key="(row: AssemblyDiffRow) => `${row.serverId}-${row.moduleName}`"
-                :span-method="checkSpanMethod">
+            <el-table :data="checkDisplayRows" size="default" border v-loading="checkLoading"
+                class="staging-table check-table" :row-key="checkRowKey" :expand-row-keys="checkExpandRowKeys"
+                :span-method="checkSpanMethod" :cell-class-name="checkCellClassName" @expand-change="onCheckExpandChange">
                 <el-table-column type="expand">
                     <template #default="{ row }">
                         <div class="check-detail" v-if="row.details.length > 0">
@@ -500,14 +490,10 @@
             :services="restoreServices" :loading="backupRestoring" @restore="onRestoreBackup" @stop="onStopDialogOp" />
 
         <appconfig-dialog ref="appconfigDialogRef" @environment-change="onAppConfigEnvChange"
-            @project-change="onAppConfigProjectChange" @refresh="getPublishAppconfigs()" />
+            @project-change="onAppConfigProjectChange" @refresh="onAppconfigRefresh" />
 
         <!-- 功能说明对话框 -->
         <help-dialog ref="helpDialogRef" />
-
-        <!-- 创建生成DLL脚本对话框 -->
-        <create-dll-script-dialog v-model="createDllScriptVisible" :project-name="state.publishData.projectName"
-            :environment-name="displayEnvironment(state.publishData.environment)" @saved="onDllScriptSaved" />
     </div>
 </template>
 
@@ -516,7 +502,6 @@ import {
     reactive,
     ref,
     computed,
-    watch,
     onBeforeMount,
     onBeforeUnmount,
     defineAsyncComponent,
@@ -527,16 +512,12 @@ import {
     CircleClose,
     EditPen,
     VideoPause,
-    VideoPlay,
     QuestionFilled,
     CaretBottom,
     CloseBold,
-    FolderOpened,
-    Delete,
 } from "@element-plus/icons-vue";
 import { cmdInvoke } from "@/utils/command";
 import { path } from "@tauri-apps/api";
-import { open } from "@tauri-apps/plugin-dialog";
 import { useProjectDb } from "@/database/project/index";
 import { useAppconfigDb } from "@/database/appconfig/index";
 import {
@@ -547,6 +528,7 @@ import {
 import { loadPublishSettings, getPublishModuleOrder, isStepPackWpfInGet, isStepOneClickVisible } from "@/utils/publishSettings";
 import mittBus from "@/utils/mitt";
 import { useStepLog } from "@/composables/useStepLog";
+import { useStepCompile } from "@/composables/useStepCompile";
 import {
     useStepPublish,
     type ServiceStatusRow,
@@ -554,6 +536,10 @@ import {
     type AssemblyDiffRow,
     type ServiceBackupRow,
 } from "@/composables/useStepPublish";
+// 编译解决方案配置行（发布信息卡内的独立组件，配置由 useStepCompile 统一维护）
+import CompileSolutionBar from "./components/compileSolutionBar.vue";
+// 获取最新代码（复用主页实现：TFS tf get / Git git pull --ff-only）
+import { pullLatestCode } from "@/utils/sourceControl";
 
 // 日志组合式函数
 const stepLogApi = useStepLog();
@@ -604,9 +590,6 @@ const HelpDialog = defineAsyncComponent(
 );
 const RestoreBackupDialog = defineAsyncComponent(
     () => import("./components/restoreBackupDialog.vue")
-);
-const CreateDllScriptDialog = defineAsyncComponent(
-    () => import("./components/createDllScriptDialog.vue")
 );
 
 // 查看功能说明
@@ -684,6 +667,24 @@ const appconfigDb = useAppconfigDb();
 
 const state = reactive({
     funModule: [
+        {
+            title: "获取最新代码",
+            desc: "按应用配置的[获取dll方式]（TFS/Git）拉取仓库最新代码（直接执行，不受[拉取最新代码]开关控制）",
+            iconBgColor: "--next-color-latest-lighter",
+            iconFont: "smom-icon smom-icon-zuixinbanben",
+            iconColor: "--next-color-latest",
+            loading: false,
+            loadingText: "拉取中",
+        },
+        {
+            title: "编译解决方案",
+            desc: "用 MSBuild 一次编译整个解决方案（.sln），替代逐个服务项目编译；解决方案在发布信息卡配置（实时落库），开启「拉取最新代码」时编译前先获取最新代码",
+            iconBgColor: "--next-color-warning-lighter",
+            iconFont: "smom-icon smom-icon-bianyigongcheng",
+            iconColor: "--el-color-warning",
+            loading: false,
+            loadingText: "编译中",
+        },
         {
             title: "一键发布",
             desc: "依次执行：获取程序集 → 打包WPF（不发布WPF时自动跳过） → 上传程序集 → 发布，任一步失败即中止",
@@ -783,15 +784,6 @@ const state = reactive({
             loading: false,
             loadingText: "查询中",
         },
-        {
-            title: "创建生成DLL脚本",
-            desc: "选择 TFS/Git 模板并填入代码根目录、解决方案等变量，生成 DLL 生成脚本并保存到本机",
-            iconBgColor: "--next-color-primary-lighter",
-            iconFont: "smom-icon smom-icon-chengxuji",
-            iconColor: "--el-color-primary",
-            loading: false,
-            loadingText: "生成中",
-        },
     ],
     // 项目发布信息
     publishData: {
@@ -809,8 +801,8 @@ const currModuleIndex = ref(0);
 
 // ==================== 更多功能下拉菜单 ====================
 // 收纳进「更多功能」菜单的功能标题（顶部不再平铺展示）
-const moreMenuTitles = ["备份", "备份管理", "服务管理", "查看服务端程序集", "查看本机程序集", "创建生成DLL脚本"];
-// 顶部平铺卡片：排除收纳进菜单的功能；一键发布排在第一位、按设置开关显隐；「一步获取程序集」开启或未发布 WpfClient 时隐藏打包WPF卡片
+const moreMenuTitles = ["备份", "备份管理", "服务管理", "查看服务端程序集", "查看本机程序集"];
+// 顶部平铺卡片：排除收纳进菜单的功能；按 funModule 顺序展示（获取最新代码 → 编译解决方案 → 一键发布…）；「一步获取程序集」开启或未发布 WpfClient 时隐藏打包WPF卡片
 const mainFunModules = computed(() =>
     state.funModule
         .map((item, index) => ({ ...item, index }))
@@ -834,9 +826,6 @@ const onMoreMenuCommand = (index: number) => {
     onFunModuleHandle(index);
 };
 
-// 创建DLL生成脚本对话框
-const createDllScriptVisible = ref(false);
-
 // STEP 业务组合式函数
 const stepPublishApi = useStepPublish(
     {
@@ -848,6 +837,66 @@ const stepPublishApi = useStepPublish(
     },
     stepLogApi
 );
+
+// 当前应用配置的解决方案路径（t_app_config.solution_path，发布信息卡调整后实时落库）
+const appconfigSolutionPath = computed(() => String(state.publishData.appconfigData?.solutionPath || ""));
+
+// STEP 编译解决方案组合式函数（独立步骤：一次编译整个 .sln，编译参数存本机按 项目 + 环境 记忆）
+// 只通过 checkStop 读取停止标记，不改动 useStepPublish 内部状态
+const stepCompileApi = useStepCompile(
+    {
+        projectId: () => state.publishData.projectId,
+        environment: () => state.publishData.environment,
+        appconfigData: () => state.publishData.appconfigData,
+        appconfigSolutionPath: () => appconfigSolutionPath.value,
+        checkStop: () => stepPublishApi.checkStop(),
+    },
+    stepLogApi
+);
+// 模板内直接绑定需用 ref 本身（stepCompileApi 是普通对象，模板不会自动解包其上的 ref）
+const compileConfig = stepCompileApi.config;
+
+// 发布信息卡是否取到应用配置（拉取最新代码开关的可用前提）
+const hasAppconfig = computed(() => !!state.publishData.appconfigData?.id);
+
+// 拉取最新代码开关：控制【编译解决方案】前是否先获取一遍最新代码（存应用配置 configItems，实时落库）
+const pullLatestEnabled = computed({
+    get: () => Number(state.publishData.appconfigData?.configItems?.isPullLatest ?? 1) === 1,
+    set: async (val: boolean) => {
+        const appconfig = state.publishData.appconfigData;
+        if (!appconfig?.id) {
+            ElMessage.warning("未获取到应用配置，无法保存[拉取最新代码]开关");
+            return;
+        }
+        const configItems = { ...(appconfig.configItems || {}), isPullLatest: val ? 1 : 0 };
+        const result = await appconfigDb.updateAppconfigConfigItems(Number(appconfig.id), configItems);
+        if (result.code !== 0) {
+            ElMessage.error(result.msg);
+            return;
+        }
+        // 成功后才同步内存（getter 依据内存，失败时开关自动回弹）
+        appconfig.configItems = configItems;
+        appconfig.configItemsJson = JSON.stringify(configItems);
+        ElMessage.success(`已保存：编译解决方案前${val ? "先获取" : "不获取"}最新代码`);
+    },
+});
+
+// 发布信息卡调整解决方案路径：实时落库到应用配置（t_app_config.solution_path）
+const onUpdateSolutionPath = async (solutionPath: string | null) => {
+    const appconfig = state.publishData.appconfigData;
+    if (!appconfig?.id) {
+        ElMessage.warning("未获取到应用配置，无法保存解决方案路径");
+        return;
+    }
+    const result = await appconfigDb.updateAppconfigSolutionPath(Number(appconfig.id), solutionPath);
+    if (result.code !== 0) {
+        ElMessage.error(result.msg);
+        return;
+    }
+    // 成功后才同步内存（模板绑定依据内存，失败时界面自动回弹）
+    appconfig.solutionPath = solutionPath;
+    ElMessage.success(solutionPath ? `已保存解决方案路径：${solutionPath}` : "已清除解决方案路径");
+};
 
 // 应用配置弹框环境变更
 const onAppConfigEnvChange = (newEnv: number) => {
@@ -896,7 +945,7 @@ const checkClientPathRecentFiles = async (opTitle: string): Promise<boolean> => 
     // 逐个模块读取本机程序集目录下最新文件修改时间
     // WpfClient 按操作与产物结构区分：
     //  获取程序集 → 产物在 <输出路径>；
-    //  上传程序集 → 上传目标是 packOutput（打包WPF后才存在），检查其一级文件（各 zip + Manifest.xml）
+    //  上传程序集 → 上传目标是 packOutput/<服务器id>（打包WPF后才存在），检查其一级文件（各 zip + Manifest.xml）
     //  打包WPF -> 产物在 <输出路径>/[生成的目录]
     const latestTexts = new Array<string>();
     try {
@@ -908,7 +957,21 @@ const checkClientPathRecentFiles = async (opTitle: string): Promise<boolean> => 
             }
             if (opTitle === "上传程序集") {
                 if (mod.key === "wpfClient") {
-                    checkDirs.push({ label: mod.name, dir: `${outPath}/${mod.name}/packOutput` });
+                    // 打包产出目录按服务器 id 区分（packOutput/<服务器id>），逐个参与服务器检查
+                    const wpfMod = mod.mod as WpfClientConfigType;
+                    const wpfServers = wpfMod?.serverArr?.length
+                        ? wpfMod.serverArr
+                        : wpfMod?.serverId
+                            ? [{ id: wpfMod.serverId, name: wpfMod.serverName } as SelectServerType]
+                            : [];
+                    if (wpfServers.length > 0) {
+                        for (const wpfServer of wpfServers) {
+                            checkDirs.push({ label: mod.name, dir: `${outPath}/${mod.name}/packOutput/${Number(wpfServer.id)}` });
+                        }
+                    }
+                    else {
+                        checkDirs.push({ label: mod.name, dir: `${outPath}/${mod.name}/packOutput` });
+                    }
                 }
                 else {
                     checkDirs.push({ label: mod.name, dir: `${outPath}/${mod.name}` });
@@ -962,16 +1025,6 @@ const checkClientPathRecentFiles = async (opTitle: string): Promise<boolean> => 
 // 功能模块触发
 const onFunModuleHandle = async (index: number) => {
     const title = state.funModule[index].title;
-    // 创建生成DLL脚本：不依赖应用配置，直接打开对话框（不进入 loading/发布日志流程）
-    if (title === "创建生成DLL脚本") {
-        const currModule = state.funModule.find((item) => item.loading);
-        if (currModule) {
-            ElMessage.info(`正在[${currModule.title}]中，请稍等！`);
-            return;
-        }
-        createDllScriptVisible.value = true;
-        return;
-    }
     if (showEmptyAppConfig.value) {
         ElMessage.warning("未获取到要发布的应用配置信息！");
         return;
@@ -1012,6 +1065,31 @@ const onFunModuleHandle = async (index: number) => {
                 "发布确认",
                 {
                     confirmButtonText: "开始发布",
+                    cancelButtonText: "取消",
+                    dangerouslyUseHTMLString: true,
+                    type: "warning",
+                }
+            );
+        } catch {
+            return;
+        }
+    }
+
+    // 编译解决方案：执行前确认目标与参数（MSBuild 耗时较长，避免误点）
+    if (title === "编译解决方案") {
+        const compileCfg = compileConfig.value;
+        if (!appconfigSolutionPath.value.trim()) {
+            ElMessage.warning(
+                "请先在应用配置中维护「解决方案」路径，或在本页发布信息卡【解决方案】中点【选择】指定（实时落库）"
+            );
+            return;
+        }
+        try {
+            await ElMessageBox.confirm(
+                `将用 MSBuild 编译整个解决方案（一次编译，替代逐个服务项目编译）。<br/><br/>· 解决方案：<span style="word-break: break-all;">${appconfigSolutionPath.value}</span><br/>· 生成模式：${compileCfg.buildMode}，平台：${compileCfg.platform || "解决方案默认"}<br/>· 方式：${compileCfg.isRebuild ? "重新生成(Rebuild)" : "增量生成(Build)"}<br/>· 编译前拉取最新代码：${pullLatestEnabled.value ? "是" : "否"}<br/><br/>编译过程可在日志卡右侧点【停止】中断。是否开始编译？`,
+                "编译解决方案确认",
+                {
+                    confirmButtonText: "开始编译",
                     cancelButtonText: "取消",
                     dangerouslyUseHTMLString: true,
                     type: "warning",
@@ -1074,6 +1152,8 @@ const onFunModuleHandle = async (index: number) => {
     }
     if (isSuccess) {
         if (title === "一键发布") printInfoLog("一键发布成功。");
+        if (title === "获取最新代码") printInfoLog("获取最新代码成功。");
+        if (title === "编译解决方案") printInfoLog("编译解决方案成功。");
         if (title === "获取程序集") printInfoLog("获取程序集成功。");
         if (title === "备份") printInfoLog("备份成功。");
         if (title === "打包WPF") printInfoLog("打包WPF成功。");
@@ -1081,6 +1161,16 @@ const onFunModuleHandle = async (index: number) => {
         if (title === "发布") printInfoLog("发布成功。");
     }
     printLogDivider(`【${title}】执行结束`);
+};
+
+// 获取最新代码：复用 sourceControl 的拉取实现（TFS tf get / Git git pull --ff-only）
+// 直接点击按钮不受「拉取最新代码」开关控制（该开关只控制编译解决方案的前置拉取）；
+// skipped（无源码配置/分支不一致等）按未成功返回，原因已由 pullLatestCode 打印，与主页行为一致
+const pullLatestCodeForStep = async (): Promise<boolean> => {
+    const pullResult = await pullLatestCode(state.publishData.appconfigData, {
+        log: (content, type) => printInfoLog(content, type),
+    });
+    return pullResult.code === 0 && !pullResult.data?.skipped;
 };
 
 // 一键发布链路：获取程序集 → 打包WPF（按需） → 上传程序集 → 发布，任一步失败即中止
@@ -1142,6 +1232,10 @@ const executeFunModule = async (title: string): Promise<boolean> => {
             }
             return true;
         }
+        case "获取最新代码":
+            return await pullLatestCodeForStep();
+        case "编译解决方案":
+            return await stepCompileApi.compileSolution();
         case "备份":
             return await stepPublishApi.backupServices();
         case "打包WPF":
@@ -1364,17 +1458,24 @@ const contiguousByServer = <T extends { serverName: string }>(rows: T[]): T[] =>
     return out;
 };
 // 生成「服务器」列合并的 span-method：组首行 rowspan = 组内行数，组内其余行 0/0；其他列走默认渲染
-const serverSpanMethod = <T extends { serverName: string }>(rows: T[]) => {
+// 带展开行的表格（核对程序集）需额外补偿：展开行在 DOM 里也是一行（el-table 单独渲染、不走 span-method），
+// 组内每有一个展开行，合并跨度要多算 1 行，否则组尾行的服务器格丢失、后续列错位，展开明细也会被合并格压住
+const serverSpanMethod = <T extends { serverName: string }>(
+    rows: T[],
+    options?: { rowKey?: (row: T) => string; expandedKeys?: Set<string> }
+) => {
     const firstIndex = new Map<string, number>();
     const rowspanByIndex = new Map<number, number>();
+    // 该行是否处于展开状态（展开行动态多占一行）
+    const extraRows = (row: T) => (options?.rowKey && options.expandedKeys?.has(options.rowKey(row)) ? 1 : 0);
     rows.forEach((row, index) => {
         const name = row.serverName;
         if (!firstIndex.has(name)) {
             firstIndex.set(name, index);
-            rowspanByIndex.set(index, 1);
+            rowspanByIndex.set(index, 1 + extraRows(row));
         } else {
             const first = firstIndex.get(name)!;
-            rowspanByIndex.set(first, (rowspanByIndex.get(first) || 1) + 1);
+            rowspanByIndex.set(first, (rowspanByIndex.get(first) || 1) + 1 + extraRows(row));
         }
     });
     return ({ row, rowIndex, column }: { row: T; rowIndex: number; column: { property?: string } }) => {
@@ -1431,13 +1532,38 @@ const checkLoading = ref(false);
 const checkRows = ref<AssemblyDiffRow[]>([]);
 const checkErrorMsg = ref("");
 const checkOnlyDiff = ref(true);
+// 行身份键：合并跨度、展开状态、表格 row-key 三处同源，改键逻辑只能改这一处
+const checkRowKey = (row: AssemblyDiffRow) => `${row.serverId}-${row.moduleName}`;
 // 仅看差异：过滤掉一致的行（差异合计含缺失/时间不一致/服务器多出），并保证同服务器行相邻
 const checkDisplayRows = computed(() =>
     contiguousByServer(
         checkOnlyDiff.value ? checkRows.value.filter((row) => !row.consistent) : checkRows.value
     )
 );
-const checkSpanMethod = computed(() => serverSpanMethod(checkDisplayRows.value));
+// 用户展开的行键（受控展开）：合并「服务器」列时展开行会多占一行，span-method 要按它补偿；
+// 用受控展开而非放任 el-table 自己存，是为了让键集合始终等于「当前展示行里真正展开的那些」——
+// 切换「仅看差异」或重新核对后自动收敛，不会残留过期键导致合并跨度多跨一行
+const checkExpandedKeySet = ref<Set<string>>(new Set());
+const checkExpandedKeys = computed(() => {
+    const keys = new Set<string>();
+    for (const row of checkDisplayRows.value) {
+        const key = checkRowKey(row);
+        if (checkExpandedKeySet.value.has(key)) keys.add(key);
+    }
+    return keys;
+});
+const checkExpandRowKeys = computed(() => [...checkExpandedKeys.value]);
+const onCheckExpandChange = (_row: AssemblyDiffRow, expandedRows: AssemblyDiffRow[] | boolean) => {
+    const list = Array.isArray(expandedRows) ? expandedRows : [];
+    checkExpandedKeySet.value = new Set(list.map(checkRowKey));
+};
+const checkSpanMethod = computed(() =>
+    serverSpanMethod(checkDisplayRows.value, { rowKey: checkRowKey, expandedKeys: checkExpandedKeys.value })
+);
+// 合并后的服务器单元格会横跨该服务器的全部行（含很高的展开明细行），内容顶对齐，
+// 让服务器名停在组首行；否则垂直居中的名字会漂到明细中间、压住明细文字
+const checkCellClassName = ({ column }: { column: { property?: string } }) =>
+    column.property === "serverName" ? "check-server-cell" : "";
 const checkDiffText = (type: string) =>
     type === "missing" ? "缺失" : type === "timeDiff" ? "时间不一致" : "服务器多出";
 const checkDiffTagType = (type: string) =>
@@ -1456,6 +1582,8 @@ const onShowAssemblyCheck = async (index: number) => {
     checkRows.value = [];
     checkErrorMsg.value = "";
     checkOnlyDiff.value = true;
+    // 新一轮核对的明细行是全新对象，清掉上一轮的展开状态
+    checkExpandedKeySet.value = new Set();
     try {
         await loadPublishSettings();
         projectAssemblyOutPath.value = await getProjectOutPath();
@@ -1763,6 +1891,12 @@ const getProjectDefault = async (options?: { keepCurrentEnvironment?: boolean })
     await getPublishAppconfigs();
 };
 
+// 应用配置弹窗保存后刷新：项目列表（同步解决方案路径）+ 当前项目环境的应用配置（同步拉取最新代码等开关）
+const onAppconfigRefresh = async () => {
+    await getProjectList();
+    await getPublishAppconfigs();
+};
+
 // 获取发布的应用程序配置
 const getPublishAppconfigs = async () => {
     let dataResult = await appconfigDb.getPublishAppconfigs(
@@ -1848,120 +1982,6 @@ const saveRecentMinutesToStorage = () => {
     } catch (error) {
         console.error("保存最新时间阈值失败:", error);
     }
-};
-
-// ==================== 生成DLL脚本（按 项目 + 环境 关联，存本机 localStorage） ====================
-const DLL_SCRIPT_KEY_PREFIX = "publish_step_dll_script";
-const dllScriptPath = ref("");
-// 当前「项目 + 环境」对应的存储键（未选项目/环境时为空，不读不写）
-const dllScriptStorageKey = computed(() => {
-    const projectId = Number(state.publishData.projectId) || 0;
-    const environment = Number(state.publishData.environment) || 0;
-    return projectId > 0 && environment > 0
-        ? `${DLL_SCRIPT_KEY_PREFIX}_${projectId}_${environment}`
-        : "";
-});
-// 切换项目/环境时重新读取对应脚本路径
-watch(
-    dllScriptStorageKey,
-    (storageKey) => {
-        if (!storageKey) {
-            dllScriptPath.value = "";
-            return;
-        }
-        try {
-            dllScriptPath.value = localStorage.getItem(storageKey) || "";
-        } catch (error) {
-            console.error("恢复生成DLL脚本路径失败:", error);
-            dllScriptPath.value = "";
-        }
-    },
-    { immediate: true }
-);
-// 写入/清除当前「项目 + 环境」的脚本路径
-const saveDllScriptPathToStorage = (scriptPath: string) => {
-    const storageKey = dllScriptStorageKey.value;
-    if (!storageKey) return;
-    try {
-        if (scriptPath) localStorage.setItem(storageKey, scriptPath);
-        else localStorage.removeItem(storageKey);
-    } catch (error) {
-        console.error("保存生成DLL脚本路径失败:", error);
-    }
-};
-// 选择生成DLL脚本（只记路径，不改脚本内容）
-const onSelectDllScript = async () => {
-    if (!dllScriptStorageKey.value) {
-        ElMessage.warning("请先选择发布项目和发布环境");
-        return;
-    }
-    try {
-        const file = await open({
-            multiple: false,
-            title: "选择生成DLL脚本",
-            filters: [{ name: "批处理脚本", extensions: ["bat", "cmd"] }],
-        });
-        if (!file) return;
-        dllScriptPath.value = String(file).replace(/\//g, "\\");
-        saveDllScriptPathToStorage(dllScriptPath.value);
-        ElMessage.success(`已关联生成DLL脚本：${dllScriptPath.value}`);
-    } catch (error) {
-        console.error("打开脚本选择框失败:", error);
-        ElMessage.error("打开脚本选择框失败");
-    }
-};
-// 清除当前「项目 + 环境」的脚本关联
-const onClearDllScript = () => {
-    if (!dllScriptPath.value) return;
-    dllScriptPath.value = "";
-    saveDllScriptPathToStorage("");
-    ElMessage.success("已清除当前 项目 + 环境 的生成DLL脚本关联");
-};
-// 打开脚本所在目录
-const onOpenDllScriptDir = async () => {
-    if (!dllScriptPath.value) return;
-    const dir = dllScriptPath.value.replace(/[\\/][^\\/]*$/, "");
-    if (!dir) return;
-    await cmdInvoke("open_dir", { path: dir });
-};
-// 执行生成DLL脚本：脚本里带 pause 且 msbuild 耗时长，由后端在独立命令行窗口中运行（不捕获输出）
-const onRunDllScript = async () => {
-    if (!dllScriptPath.value) return;
-    try {
-        await ElMessageBox.confirm(
-            `脚本会先获取最新代码再用 MSBuild 生成 dll，耗时可能较长；执行过程显示在新打开的命令行窗口中，关闭该窗口即结束。<br/><br/>· 脚本：${dllScriptPath.value}<br/>· 项目：${state.publishData.projectName || "-"}（${displayEnvironment(
-                Number(state.publishData.environment)
-            )}）<br/><br/>是否开始执行？`,
-            "执行生成DLL脚本",
-            {
-                confirmButtonText: "开始执行",
-                cancelButtonText: "取消",
-                dangerouslyUseHTMLString: true,
-                type: "warning",
-            }
-        );
-    } catch {
-        return;
-    }
-    const result = await cmdInvoke<boolean>("run_local_script", { path: dllScriptPath.value });
-    if (result.code !== 0) {
-        ElMessage.error(`执行生成DLL脚本失败：${result.data}`);
-        return;
-    }
-    ElMessage.success("已在新的命令行窗口开始执行生成DLL脚本");
-};
-// 创建生成DLL脚本并保存后：当前 项目 + 环境 未关联脚本时自动关联（已关联则不覆盖）
-const onDllScriptSaved = (filePath: string) => {
-    if (!filePath || !dllScriptStorageKey.value) return;
-    if (dllScriptPath.value) {
-        if (dllScriptPath.value !== filePath) {
-            ElMessage.info("当前 项目 + 环境 已关联其它脚本，如需改用新脚本请点【选择】重新指定");
-        }
-        return;
-    }
-    dllScriptPath.value = filePath;
-    saveDllScriptPathToStorage(filePath);
-    ElMessage.success("已自动将该脚本关联为当前 项目 + 环境 的生成DLL脚本");
 };
 
 // 项目切换
@@ -2388,35 +2408,6 @@ $log-console-text: #ffffff;
                     font-weight: 400;
                 }
             }
-
-            // 生成DLL脚本：路径 + 选择/执行按钮同一行，路径过长省略
-            .project-dll-script-row {
-                .dll-script-box {
-                    flex: 1;
-                    display: flex;
-                    align-items: center;
-                    gap: 0.4rem;
-                    min-width: 0;
-                }
-
-                .dll-script-path {
-                    flex: 1;
-                    min-width: 0;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                    white-space: nowrap;
-                }
-
-                .dll-script-empty {
-                    flex: 1;
-                    color: var(--el-text-color-secondary);
-                    font-size: 0.85rem;
-                }
-
-                :deep(.el-button + .el-button) {
-                    margin-left: 0;
-                }
-            }
         }
     }
 
@@ -2486,6 +2477,11 @@ $log-console-text: #ffffff;
     }
 }
 
+// 核对程序集：合并后的服务器列跨到展开明细行时，内容贴顶（默认垂直居中会让服务器名落进明细区）
+.check-table :deep(td.check-server-cell) {
+    vertical-align: top;
+}
+
 // 核对程序集：工具栏与差异明细
 .check-toolbar {
     display: flex;
@@ -2508,12 +2504,15 @@ $log-console-text: #ffffff;
         padding: 0.1875rem 0;
 
         .check-detail-file {
+            flex: 1;
+            min-width: 0;
             margin-left: 0.625rem;
             font-size: 0.8125rem;
             word-break: break-all;
         }
 
         .check-detail-time {
+            flex-shrink: 0;
             margin-left: auto;
             padding-left: 1.25rem;
             font-size: 0.75rem;

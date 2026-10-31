@@ -163,14 +163,76 @@
               </el-form-item>
             </el-col>
           </template>
-          <el-tooltip content="选择 *.sln 解决方案文件 ==> 解析生成路径" placement="right" effect="light"
-            v-if="formDisabled == false">
-            <div class="form-select-file" @click="onSlnFileChange">
-              <el-icon>
-                <Files />
-              </el-icon>
+          <el-col :span="24" class="mt15">
+            <el-tooltip
+              content="如：Visual Studio 2022 的 MsBuild.exe 编译路径为：{盘符}:\Program Files\Microsoft Visual Studio\2022\{Edition}\MSBuild\Current\Bin\MSBuild.exe"
+              placement="top" effect="light">
+              <el-form-item label="MsBuild路径" prop="msBuildPath">
+                <el-input v-model="state.ruleForm.msBuildPath" placeholder="请输入MsBuild路径" maxlength="450"
+                  clearable>
+                  <template #append v-if="!formDisabled">
+                    <el-button type="info" size="small" @click="onFindMsBuildPath" :icon="Place" title="自动获取"></el-button>
+                  </template>
+                </el-input>
+              </el-form-item>
+            </el-tooltip>
+          </el-col>
+          <el-col :span="24" class="mt15">
+            <el-form-item label="解决方案" prop="solutionPath">
+              <el-input v-model="state.ruleForm.solutionPath" placeholder="选填，项目解决方案（.sln）路径；项目发布(STEP)编译解决方案用"
+                maxlength="450" clearable>
+                <template #append v-if="!formDisabled">
+                  <el-button type="info" size="small" @click="onSelectSolutionPath" :icon="Files"
+                    title="选择解决方案文件"></el-button>
+                </template>
+              </el-input>
+            </el-form-item>
+          </el-col>
+          <el-col :span="24" class="mt15">
+            <div class="switch-row">
+              <el-form-item label="重新编译" prop="isRebuild">
+                <el-tooltip content="【/t:Rebuild】建议勾选！" placement="bottom" effect="light">
+                  <el-switch v-model="state.ruleForm.configItems.isRebuild" :active-value="1" :inactive-value="0"
+                    inline-prompt active-text="开启" inactive-text="关闭" size="default" />
+                </el-tooltip>
+              </el-form-item>
+              <el-form-item label="发布前备份" prop="isBackup">
+                <el-switch v-model="state.ruleForm.configItems.isBackup" :active-value="1" :inactive-value="0"
+                  inline-prompt active-text="开启" inactive-text="关闭" size="default" />
+              </el-form-item>
+              <el-form-item label="拉取最新代码" prop="isPullLatest">
+                <el-tooltip content="开启后，发布编译前会先按应用配置的获取方式获取一遍最新代码：主页【一键发布】编译前、项目发布(STEP)【编译解决方案】编译前均生效；直接点【获取最新代码】按钮不受此开关控制"
+                  placement="bottom" effect="light">
+                  <el-switch v-model="state.ruleForm.configItems.isPullLatest" :active-value="1" :inactive-value="0"
+                    inline-prompt active-text="开启" inactive-text="关闭" size="default" />
+                </el-tooltip>
+              </el-form-item>
             </div>
-          </el-tooltip>
+          </el-col>
+          <el-col :span="24" class="mt15">
+            <el-form-item label="备份路径" prop="configItems.backupBasePath">
+              <el-input v-model="state.ruleForm.configItems.backupBasePath" placeholder="选填，配置后备份到指定路径；不填则使用默认路径"
+                maxlength="450" clearable></el-input>
+            </el-form-item>
+          </el-col>
+          <el-col :span="24" class="mt15">
+            <div class="parse-btn-row">
+              <el-tooltip content="解析生成路径：选择 *.sln 解决方案文件 ==> 解析生成路径" placement="top" effect="light"
+                v-if="formDisabled == false">
+                <el-button type="primary" size="default" @click="onSlnFileChange">
+                  <el-icon class="parse-btn-icon"><Files /></el-icon>
+                  解析生成路径
+                </el-button>
+              </el-tooltip>
+              <el-tooltip content="根据解决方案解析生成路径：使用当前「解决方案」配置的 .sln 路径直接解析" placement="top"
+                effect="light" v-if="formDisabled == false">
+                <el-button type="primary" size="default" @click="onParseFromSolutionPath">
+                  <el-icon class="parse-btn-icon"><FolderChecked /></el-icon>
+                  根据解决方案解析生成路径
+                </el-button>
+              </el-tooltip>
+            </div>
+          </el-col>
         </el-row>
         <el-tabs type="border-card">
           <el-tab-pane label="WebApiHost">
@@ -488,48 +550,6 @@
             </fieldset>
           </el-tab-pane>
         </el-tabs>
-        <el-row :gutter="10">
-          <el-col :span="24" class="mt15">
-            <el-tooltip
-              content="如：Visual Studio 2022 的 MsBuild.exe 编译路径为：{盘符}:\Program Files\Microsoft Visual Studio\2022\{Edition}\MSBuild\Current\Bin\MSBuild.exe"
-              placement="top" effect="light">
-              <el-form-item label="MsBuild路径" prop="msBuildPath">
-                <el-input v-model="state.ruleForm.msBuildPath" placeholder="请输入MsBuild路径" maxlength="450"
-                  clearable>
-                  <template #append v-if="!formDisabled">
-                    <el-button type="info" size="small" @click="onFindMsBuildPath" :icon="Place" title="自动获取"></el-button>
-                  </template>
-                </el-input>
-              </el-form-item>
-            </el-tooltip>
-          </el-col>
-          <el-col :span="24" class="mt15">
-            <div class="switch-row">
-              <el-form-item label="重新编译" prop="isRebuild">
-                <el-tooltip content="【/t:Rebuild】建议勾选！" placement="bottom" effect="light">
-                  <el-switch v-model="state.ruleForm.configItems.isRebuild" :active-value="1" :inactive-value="0"
-                    inline-prompt active-text="开启" inactive-text="关闭" size="default" />
-                </el-tooltip>
-              </el-form-item>
-              <el-form-item label="发布前备份" prop="isBackup">
-                <el-switch v-model="state.ruleForm.configItems.isBackup" :active-value="1" :inactive-value="0"
-                  inline-prompt active-text="开启" inactive-text="关闭" size="default" />
-              </el-form-item>
-              <el-form-item label="拉取最新代码" prop="isPullLatest">
-                <el-tooltip content="开启后，[一键发布]会在编译前获取TFS/Git最新代码" placement="bottom" effect="light">
-                  <el-switch v-model="state.ruleForm.configItems.isPullLatest" :active-value="1" :inactive-value="0"
-                    inline-prompt active-text="开启" inactive-text="关闭" size="default" />
-                </el-tooltip>
-              </el-form-item>
-            </div>
-          </el-col>
-          <el-col :span="24" class="mt15 mb15">
-            <el-form-item label="备份路径" prop="configItems.backupBasePath">
-              <el-input v-model="state.ruleForm.configItems.backupBasePath" placeholder="选填，配置后备份到指定路径；不填则使用默认路径"
-                maxlength="450" clearable></el-input>
-            </el-form-item>
-          </el-col>
-        </el-row>
       </el-form>
       <template #footer>
         <span class="dialog-footer">
@@ -546,7 +566,7 @@
 import { nextTick, reactive, ref } from "vue";
 import type { FormInstance, FormRules } from "element-plus";
 import { ElMessage } from "element-plus";
-import { CirclePlus, Remove, Files, Place } from "@element-plus/icons-vue";
+import { CirclePlus, Remove, Files, Place, FolderChecked } from "@element-plus/icons-vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import _ from "lodash";
 import { cmdInvoke } from "@/utils/command";
@@ -568,6 +588,22 @@ const projectDb = useProjectDb();
 const serverDb = useServerDb();
 const tfsDb = useTfsDb();
 const gitDb = useGitDb();
+
+// 选择解决方案文件（.sln），写入表单随应用配置一起落库（t_app_config.solution_path）
+const onSelectSolutionPath = async () => {
+  try {
+    const file = await open({
+      multiple: false,
+      title: "选择解决方案文件",
+      filters: [{ name: "解决方案", extensions: ["sln"] }],
+    });
+    if (!file) return;
+    state.ruleForm.solutionPath = String(file).replace(/\//g, "\\");
+  } catch (error) {
+    console.error("打开解决方案选择框失败:", error);
+    ElMessage.error("打开解决方案选择框失败");
+  }
+};
 
 // 定义变量内容
 const appconfigDialogFormRef = ref();
@@ -618,6 +654,7 @@ const state = reactive<FormDialogType<RowAppconfigType>>({
     projectName: null,
     environment: 1,
     msBuildPath: null,
+    solutionPath: null,
     dllMode: "全部",
     dllModeValue: null,
     buildMode: "Debug",
@@ -673,44 +710,31 @@ const state = reactive<FormDialogType<RowAppconfigType>>({
   },
 });
 
-// 选择*.sln解决方案文件
-const onSlnFileChange = async () => {
-  const selectSlnFileResult = await open({
-    multiple: false,
-    filters: [
-      {
-        name: "解决方案文件",
-        extensions: ["sln"],
-      },
-    ],
-  });
-  if (!selectSlnFileResult) {
-    console.warn("未选择*.sln解决方案文件");
-    return;
-  }
-  // 得到项目路径
-  const slnFilePath = removeSlash(String(selectSlnFileResult));
-  // 解析解决方案文件
-  const modules = [
-    "SIE.WebApiHost.csproj",
-    "SIE.ScheduleServer.csproj",
-    "WebClient.csproj",
-    "WpfClient.csproj",
-    "SIE.SpcMonitor.csproj",
-  ];
-  for (let i = 0; i < modules.length; i++) {
-    const moduleName = modules[i];
+// 按解决方案路径解析生成各模块路径（两种入口共用：手动选 sln / 用已配置的解决方案路径）
+const slnParseModules = [
+  { csproj: "SIE.WebApiHost.csproj", label: "WebApiHost" },
+  { csproj: "SIE.ScheduleServer.csproj", label: "ScheduleServer" },
+  { csproj: "WebClient.csproj", label: "WebClient" },
+  { csproj: "WpfClient.csproj", label: "WpfClient" },
+  { csproj: "SIE.SpcMonitor.csproj", label: "SpcMonitor" },
+];
+const parseSlnGeneratePaths = async (slnFilePath: string) => {
+  // 解析解决方案文件（逐个模块记录解析情况，结束后统一提示）
+  const resolved: string[] = [];
+  const failed: string[] = [];
+  for (const { csproj, label } of slnParseModules) {
     const parseSlnProjectResult = await cmdInvoke("parse_sln_project", {
-      moduleName,
+      moduleName: csproj,
       slnFilePath: slnFilePath,
       isNewVersion: state.ruleForm.configItems.isNewVersion,
       buildMode: state.ruleForm.buildMode || "Debug",
     });
     if (parseSlnProjectResult.code !== 0) {
       console.warn(parseSlnProjectResult.data);
+      failed.push(label);
       continue;
     }
-    switch (moduleName) {
+    switch (csproj) {
       case "SIE.WebApiHost.csproj":
         state.ruleForm.configItems.webApiHost.clientPath = parseSlnProjectResult.data;
         break;
@@ -729,9 +753,11 @@ const onSlnFileChange = async () => {
       default:
         break;
     }
+    resolved.push(label);
   }
 
   // 默认选中：Domain、UI
+  let defaultDirsApplied = false;
   if (!generateDirs.value || generateDirs.value.length === 0) {
     generateDirs.value = state.ruleForm.configItems.isNewVersion
       ? ["Plugins"]
@@ -739,8 +765,48 @@ const onSlnFileChange = async () => {
     state.ruleForm.configItems.wpfClient.generateDirJson = JSON.stringify(
       generateDirs.value
     );
+    defaultDirsApplied = true;
   }
-  return true;
+
+  // 统一提示解析情况
+  if (resolved.length < 1) {
+    ElMessage.error(`解析完成：未解析到任何模块的生成路径（${slnFilePath}），请确认解决方案是否包含相关项目`);
+  } else if (failed.length > 0) {
+    ElMessage.warning(`解析完成：成功 ${resolved.length} 个（${resolved.join("、")}），未解析到 ${failed.length} 个（${failed.join("、")}）`);
+  } else {
+    ElMessage.success(`解析完成：成功解析 ${resolved.length} 个模块的生成路径（${resolved.join("、")}）${defaultDirsApplied ? "，生成目录已默认勾选" : ""}`);
+  }
+  return failed.length < slnParseModules.length;
+};
+
+// 选择*.sln解决方案文件 ==> 解析生成路径（原按钮逻辑）
+const onSlnFileChange = async () => {
+  const selectSlnFileResult = await open({
+    multiple: false,
+    filters: [
+      {
+        name: "解决方案文件",
+        extensions: ["sln"],
+      },
+    ],
+  });
+  if (!selectSlnFileResult) {
+    console.warn("未选择*.sln解决方案文件");
+    return;
+  }
+  // 得到项目路径
+  const slnFilePath = removeSlash(String(selectSlnFileResult));
+  return await parseSlnGeneratePaths(slnFilePath);
+};
+
+// 根据解决方案解析生成路径：使用当前「解决方案」配置的 .sln 路径直接解析（不再弹文件选择框）
+const onParseFromSolutionPath = async () => {
+  const slnFilePath = removeSlash(String(state.ruleForm.solutionPath || "").trim());
+  if (!slnFilePath) {
+    ElMessage.warning("请先在「解决方案」中配置 .sln 路径");
+    return;
+  }
+  return await parseSlnGeneratePaths(slnFilePath);
 };
 
 // 项目管理切换：按「项目+当前环境」载入目标项目的应用配置
@@ -1466,12 +1532,10 @@ const onSubmit = async () => {
     state.ruleForm.dllModeValue = JSON.stringify(selectedItem);
   }
   if (state.dialog.type == "edit") {
-    // 修改
+    // 修改（解决方案路径随表单一起落库 t_app_config.solution_path）
     let updateResult = await appconfigDb.updateAppconfig(state.ruleForm);
     if (updateResult.code === 0) {
       ElMessage.success("修改成功！");
-      console.log('=== appconfigDialog 保存成功 ===');
-      console.log('  - state.ruleForm.environment:', state.ruleForm.environment);
       closeDialog(); // 关闭弹窗
       // 先通知项目变更（弹窗内可能切换了项目管理），再通知环境变更，最后刷新配置
       emit("project-change", state.ruleForm.projectId);
@@ -1483,7 +1547,7 @@ const onSubmit = async () => {
     return;
   }
 
-  // 添加
+  // 添加（解决方案路径随表单一起落库 t_app_config.solution_path）
   let insertResult = await appconfigDb.insertAppconfig(state.ruleForm);
   if (insertResult.code === 0) {
     ElMessage.success("添加成功！");
@@ -1639,15 +1703,14 @@ defineExpose({
   margin-left: 15px;
 }
 
-.form-select-file {
-  text-align: center;
-  display: block;
-  width: 100%;
-  margin: 0px 5px;
-  background-color: #fbfbfb;
-  height: 32px;
-  line-height: 37px;
-  cursor: pointer;
+.parse-btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+
+  .parse-btn-icon {
+    margin-right: 5px;
+  }
 }
 
 .range-separator {
@@ -1678,10 +1741,6 @@ defineExpose({
     .version-remark {
       color: var(--el-text-color-regular);
     }
-  }
-
-  .form-select-file {
-    background-color: var(--next-color-primary);
   }
 
   .form-server-fieldset {

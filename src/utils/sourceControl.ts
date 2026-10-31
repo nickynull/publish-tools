@@ -109,6 +109,11 @@ const pullTfsLatest = async (
 		options.log(`获取最新代码失败：${getOutput}`, "log-error");
 		return buildResult(1, "获取最新代码失败", { skipped: false });
 	}
+	// 输出获取情况（与 Git 路径的 pull 输出行为对齐），全量输出不截断
+	const getOutputText = getOutput.trim();
+	if (getOutputText) {
+		options.log(`获取情况：\n${getOutputText}`);
+	}
 
 	options.log("获取最新代码完成.", "log-success");
 	return buildResult(0, "获取最新代码完成", { skipped: false });

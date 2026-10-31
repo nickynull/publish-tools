@@ -29,6 +29,7 @@ declare type ExportProject = {
 declare type ExportAppconfig = {
 	environment: number;
 	msBuildPath: string | null;
+	solutionPath: string | null;
 	dllMode: string | null;
 	dllModeValue: string | null;
 	buildMode: string | null;

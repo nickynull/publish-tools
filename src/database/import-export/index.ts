@@ -58,7 +58,7 @@ export function useImportExportDb() {
           const appconfigRows = await (
             await db()
           ).select<RowAppconfigType[]>(
-            "SELECT id, project_id projectId, environment, ms_build_path msBuildPath, dll_mode dllMode, dll_mode_value dllModeValue, build_mode buildMode, config_items_json configItemsJson FROM t_app_config WHERE id = $1",
+            "SELECT id, project_id projectId, environment, ms_build_path msBuildPath, solution_path solutionPath, dll_mode dllMode, dll_mode_value dllModeValue, build_mode buildMode, config_items_json configItemsJson FROM t_app_config WHERE id = $1",
             [id]
           );
           if (!appconfigRows || appconfigRows.length === 0) {
@@ -197,6 +197,7 @@ export function useImportExportDb() {
             appconfig: {
               environment: ac.environment ?? 0,
               msBuildPath: ac.msBuildPath,
+              solutionPath: ac.solutionPath ?? null,
               dllMode,
               dllModeValue,
               buildMode: ac.buildMode ?? "Debug",
@@ -346,11 +347,12 @@ export function useImportExportDb() {
             }
           }
           const insertAppconfigResult = await database.execute(
-            "INSERT INTO t_app_config (project_id, environment, ms_build_path, dll_mode, dll_mode_value, build_mode, config_items_json) VALUES($1, $2, $3, $4, $5, $6, $7) RETURNING id;",
+            "INSERT INTO t_app_config (project_id, environment, ms_build_path, solution_path, dll_mode, dll_mode_value, build_mode, config_items_json) VALUES($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id;",
             [
               newProjectId,
               item.appconfig.environment,
               item.appconfig.msBuildPath,
+              item.appconfig.solutionPath ?? null,
               item.appconfig.dllMode,
               dllModeValue,
               item.appconfig.buildMode || "Debug",

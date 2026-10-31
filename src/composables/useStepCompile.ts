@@ -224,7 +224,8 @@ export function useStepCompile(ctx: StepCompileContext, log: StepLogApi) {
 		// 4. 结果处理：主动停止按警告记一条，编译失败逐行打印错误
 		if (result.code !== 0) {
 			const raw = String(result.data ?? result.msg ?? "");
-			if (raw.includes("已手动停止")) {
+			// 用注入的停止标记判定，不比对后端错误文案（文案改动不会让判定静默失效）
+			if (ctx.checkStop?.()) {
 				printInfoLog(`编译已被手动停止（耗时 ${elapsed}）`, "log-warning");
 				return false;
 			}

@@ -561,7 +561,7 @@
             </div>
             <div ref="logContentRef" class="card-item-content log-content">
               <p v-for="log in logPrintInfo" :class="log.type">
-                {{ log.content.value }}
+                <span class="log-text">{{ log.content.value }}</span>
                 <el-text :type="log.content.uploadFile.currNumber >=
                   log.content.uploadFile.totalNumber
                   ? 'primary'
@@ -4416,6 +4416,12 @@ $log-console-text: #ffffff;
         counter-reset: line-number;
         padding-right: 1em;
         text-align: left;
+
+        // 日志正文：保留命令输出的原始换行（多行输出不再挤成一段），长路径仍强制折行
+        .log-text {
+          white-space: pre-wrap;
+          word-break: break-all;
+        }
       }
     }
 

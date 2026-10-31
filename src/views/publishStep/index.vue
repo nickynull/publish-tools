@@ -286,7 +286,7 @@
                                                 :style="{ minWidth: logLineNoWidth }">{{
                                                 logLine.id ?? logIndex + 1
                                                 }}</span>
-                                            {{ logLine.content.value }}
+                                            <span class="log-text">{{ logLine.content.value }}</span>
                                             <el-text type="primary" size="small"
                                                 v-if="logLine.content.uploadFile?.progressText">{{
                                                 logLine.content.uploadFile.progressText }}</el-text>
@@ -502,6 +502,7 @@ import {
     reactive,
     ref,
     computed,
+    watch,
     onBeforeMount,
     onBeforeUnmount,
     defineAsyncComponent,
@@ -1034,6 +1035,10 @@ const onFunModuleHandle = async (index: number) => {
         ElMessage.info(`正在[${currModule.title}]中，请稍等！`);
         return;
     }
+
+    // 每次操作开始前复位停止标记：后端取消标记是进程级全局量，
+    // 上次对话框操作被【停止】后若未清掉，本次操作的第一条命令就会直接返回「已手动停止」
+    stepPublishApi.resetStopState();
 
     // 查看类按钮：打开对话框展示，不写发布日志
     if (title === "服务管理") {
@@ -1744,6 +1749,12 @@ const onStopDialogOp = () => {
     stepPublishApi.requestStop();
     ElMessage.info("已发出停止请求，正在立即停止.");
 };
+// 对话框操作结束后复位停止标记：Rust 端取消标记是进程级全局量（`PUBLISH_CANCEL`），
+// 只靠「下次操作开始」复位的话，被停止过的对话框操作会把标记留给其它页面的发布流程（如主页一键发布），
+// 导致那边的第一条命令就返回「已手动停止」；这里在操作全部收尾时兜底清掉
+watch(isDialogOperating, (operating) => {
+    if (!operating) stepPublishApi.resetStopState();
+});
 
 // 打开程序集输出路径
 const onOpenAssemblyOutPath = async (openPath: string) => {
@@ -2319,6 +2330,12 @@ $log-console-text: #ffffff;
                         color: var(--el-text-color-secondary);
                         text-align: right;
                         user-select: none;
+                    }
+
+                    // 日志正文：保留命令输出的原始换行（多行输出不再挤成一段），长路径仍强制折行
+                    .log-text {
+                        white-space: pre-wrap;
+                        word-break: break-all;
                     }
 
                     // 日志行配色固定（终端风格），覆盖 theme/app.scss 中跟随主题的 .log-* 定义

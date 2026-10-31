@@ -707,7 +707,8 @@ const runUpload = async () => {
             }
 
             const errorText = String(result.data ?? result.msg ?? "");
-            if (errorText.includes("已手动终止")) {
+            // 用「是否点过终止操作」判定，不比对后端错误文案（文案改动不会让判定静默失效）
+            if (terminating.value) {
                 task.status = "已终止";
                 task.tagType = "info";
                 task.message = "已手动终止";
@@ -825,7 +826,8 @@ const loadDir = async (targetPath?: string) => {
         if (seq !== loadSeq.value) return;
         if (result.code !== 0) {
             const errorText = String(result.data ?? "读取远程目录失败");
-            if (errorText.includes("已手动终止")) {
+            // 用「是否点过终止操作」判定，不比对后端错误文案
+            if (terminating.value) {
                 // 主动终止不算失败：保留当前列表与路径，避免把刚读到的内容清成「无文件」
                 printInfoLog(`读取已终止：${remotePath}`, "log-warning");
                 ElMessage.info("已终止读取远程目录");
@@ -983,7 +985,8 @@ const runDownload = async (rows: RemoteDirEntry[]) => {
                 continue;
             }
             const errorText = String(result.data ?? result.msg ?? "");
-            if (errorText.includes("已手动终止")) {
+            // 用「是否点过终止操作」判定，不比对后端错误文案（文案改动不会让判定静默失效）
+            if (terminating.value) {
                 printInfoLog(`下载已终止：${file.name}`, "log-warning");
                 stopped = true;
                 break;

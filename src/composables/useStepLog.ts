@@ -67,15 +67,65 @@ export function useStepLog(options?: StepLogOptions) {
 		trimLogs();
 	};
 
-	// 绑定日志内容区 DOM 引用
-	const setLogContentRef = (el: any) => {
-		if (el) logContentEl = el;
+	// 距底部多少像素内视为「贴底」：自动到底只在贴底状态生效，否则会打断用户翻历史
+	const BOTTOM_THRESHOLD = 8;
+	// 自动到底开关：点【回到顶部】或手动上翻离开底部后暂停，滚回底部（或点【回到底部】）恢复
+	let autoScrollEnabled = true;
+
+	// 是否已滚动到底部（内容不足一屏时始终算贴底）
+	const isNearBottom = () => {
+		if (!logContentEl) return true;
+		const { scrollTop, scrollHeight, clientHeight } = logContentEl;
+		return scrollHeight - (scrollTop + clientHeight) <= BOTTOM_THRESHOLD;
 	};
 
-	// 滚动到日志底部
-	const scrollLogToBottom = () => {
+	// 滚动监听：不区分程序性滚动还是用户手动滚动，统一按「最终是否贴底」校正开关
+	const onLogScroll = () => {
+		autoScrollEnabled = isNearBottom();
+	};
+
+	/**
+	 * 绑定日志内容区 DOM 引用
+	 * 注意：组件卸载 / 元素换绑时 Vue 会以 null 回调，必须一并清空引用。
+	 * 若沿用 `if (el)` 写法，logContentEl 会悬空指向已脱离文档的旧节点
+	 * （如页签右键刷新导致组件重建），后续自动滚动全部写到废弃元素上、表现成「日志不再自动到底」。
+	 */
+	const setLogContentRef = (el: any) => {
+		const next = (el as HTMLElement | null) ?? null;
+		// 换绑（含重复挂载）前解绑旧节点，避免滚动监听叠加
+		if (logContentEl && logContentEl !== next) logContentEl.removeEventListener("scroll", onLogScroll);
+		logContentEl = next;
+		if (next) next.addEventListener("scroll", onLogScroll, { passive: true });
+	};
+
+	// 纯滚动到底：不做开关判断，供自动到底与【回到底部】共用
+	const scrollToBottom = (behavior: ScrollBehavior = "auto") => {
 		nextTick(() => {
-			if (logContentEl) logContentEl.scrollTop = logContentEl.scrollHeight;
+			if (logContentEl) logContentEl.scrollTo({ top: logContentEl.scrollHeight, behavior });
+		});
+	};
+
+	// 自动到底：跟随最新一行（用户已上翻离开底部或点了【回到顶部】时不动，避免把视图拽回去）
+	const autoScrollToBottom = () => {
+		if (!autoScrollEnabled) return;
+		scrollToBottom();
+	};
+
+	// 【回到底部】按钮：恢复自动到底并立即滚到最新一行
+	const scrollLogToBottom = (behavior: ScrollBehavior = "auto") => {
+		autoScrollEnabled = true;
+		scrollToBottom(behavior);
+	};
+
+	// 【回到顶部】按钮：暂停自动到底，否则持续输出的新日志会把视图立刻拽回底部
+	const scrollLogToTop = (behavior: ScrollBehavior = "smooth") => {
+		// 内容不足一屏时没有历史可看，保持跟随最新行（否则按钮会把自动到底永久关掉）
+		const scrollable = logContentEl
+			? logContentEl.scrollHeight - logContentEl.clientHeight > BOTTOM_THRESHOLD
+			: false;
+		autoScrollEnabled = !scrollable;
+		nextTick(() => {
+			if (logContentEl) logContentEl.scrollTo({ top: 0, behavior });
 		});
 	};
 
@@ -110,7 +160,7 @@ export function useStepLog(options?: StepLogOptions) {
 		};
 		logPrintInfo.value.push(logInfo);
 		trimLogs();
-		scrollLogToBottom();
+		autoScrollToBottom();
 		return logId;
 	};
 
@@ -131,7 +181,7 @@ export function useStepLog(options?: StepLogOptions) {
 		};
 		logPrintInfo.value.push(logInfo);
 		trimLogs();
-		scrollLogToBottom();
+		autoScrollToBottom();
 		return logId;
 	};
 
@@ -159,9 +209,10 @@ export function useStepLog(options?: StepLogOptions) {
 		log.content.uploadFile.progressText = text;
 	};
 
-	// 清空日志
+	// 清空日志：视为重新开始跟随最新输出
 	const onRemoveLogs = () => {
 		logPrintInfo.value = [];
+		autoScrollEnabled = true;
 	};
 
 	// 初始化日志
@@ -188,6 +239,8 @@ export function useStepLog(options?: StepLogOptions) {
 		maxLogLines,
 		setMaxLogLines,
 		setLogContentRef,
+		scrollLogToTop,
+		scrollLogToBottom,
 		printInfoLog,
 		printLogDivider,
 		updateLogProgress,

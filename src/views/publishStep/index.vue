@@ -305,6 +305,12 @@
                                 </div>
                             </el-tab-pane>
                         </el-tabs>
+                        <div class="log-footer">
+                            <el-button size="small" :icon="Top" title="回到日志顶部（新日志不再自动跳到最新行，滚回底部后恢复）"
+                                :disabled="!logPrintInfo.length" @click="onLogScrollTop">回到顶部</el-button>
+                            <el-button size="small" :icon="Bottom" title="回到底部（查看最新日志）"
+                                :disabled="!logPrintInfo.length" @click="onLogScrollBottom">回到底部</el-button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -516,6 +522,8 @@ import {
     QuestionFilled,
     CaretBottom,
     CloseBold,
+    Top,
+    Bottom,
 } from "@element-plus/icons-vue";
 import { cmdInvoke } from "@/utils/command";
 import { path } from "@tauri-apps/api";
@@ -550,11 +558,17 @@ const {
     maxLogLines,
     setMaxLogLines,
     setLogContentRef,
+    scrollLogToTop,
+    scrollLogToBottom,
     printInfoLog,
     printLogDivider,
     onRemoveLogs,
     initLogs,
 } = stepLogApi;
+
+// 日志滚动按钮：回到顶部 / 回到底部（日志过长时快速定位）
+const onLogScrollTop = () => scrollLogToTop();
+const onLogScrollBottom = () => scrollLogToBottom("smooth");
 
 // 日志行号显示开关：存 localStorage 本机记忆，默认开
 const STEP_LOG_LINE_NO_VISIBLE_KEY = "stepLogShowLineNo";
@@ -2311,6 +2325,16 @@ $log-console-text: #ffffff;
                     :deep(.el-tab-pane) {
                         height: 100%;
                     }
+                }
+
+                // 日志底部工具条：回到顶部 / 回到底部（高度固定，不随日志滚动）
+                .log-footer {
+                    flex: 0 0 auto;
+                    display: flex;
+                    justify-content: flex-end;
+                    align-items: center;
+                    padding: 4px 8px;
+                    border-top: 1px solid var(--el-border-color-lighter);
                 }
 
                 .log-tab-pane-content {

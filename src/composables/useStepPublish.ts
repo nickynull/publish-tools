@@ -2700,17 +2700,22 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 		);
 		const overallStartTime = Date.now();
 
-		let isSuccess = true;
+		// 单个服务实例/单台服务器失败不影响后续发布：统计成功/失败数，任一失败整体仍按失败处理
+		let successCount = 0;
+		let failCount = 0;
+		let publishIndex = 0;
 		for (const [serverId, serverInstances] of serverMap) {
 			if (checkStop()) return false;
 			const serverInfo = await getServerDetail(serverId);
 			if (!serverInfo) {
-				printInfoLog(`服务[ID:${serverId}]不存在，请检查.`, "log-error");
-				return false;
+				printInfoLog(`服务[ID:${serverId}]不存在，跳过该服务器，继续发布后续服务器.`, "log-error");
+				failCount += serverInstances.length;
+				continue;
 			}
 			if (!serverInfo.assemblyStagingPath) {
-				printInfoLog(`服务器[${serverInfo.name}]未配置[程序集暂存路径]，请先在服务器管理中配置.`, "log-error");
-				return false;
+				printInfoLog(`服务器[${serverInfo.name}]未配置[程序集暂存路径]，请先在服务器管理中配置，跳过该服务器，继续发布后续服务器.`, "log-error");
+				failCount += serverInstances.length;
+				continue;
 			}
 			const stagingBase = removeSlash(String(serverInfo.assemblyStagingPath));
 			printInfoLog(
@@ -2720,6 +2725,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			for (const ins of serverInstances) {
 				// 停止检查：实例一旦开始发布则完整执行（停止→替换→启动），避免留下已停止的服务
 				if (checkStop()) return false;
+				publishIndex++;
 				const instanceStartTime = Date.now();
 				const instanceSuccess = await (async () => {
 					const uName = serverInfo.account;
@@ -2748,6 +2754,10 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 						logPath: `${stagingBase}/发布日志.log`,
 						line: `发布开始 ${targetText}`,
 					});
+					printInfoLog(``);
+					printInfoLog(
+						`════ 发布开始 · 第 ${publishIndex}/${totalInstanceCount} 个 ════`
+					);
 					printInfoLog(
 						`发布目标：${ins.module}${ins.identity ? `（服务标识 ${ins.identity}）` : "（无服务标识，仅替换文件）"} @ ${displayOs(Number(serverInfo.os))} ${serverAddress}`
 					);
@@ -2823,6 +2833,9 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 					printInfoLog(`步骤 3/3：无服务标识，跳过开启服务.`);
 				}
 				printInfoLog(
+					`════ 发布结束 · 第 ${publishIndex}/${totalInstanceCount} 个 ════`
+				);
+				printInfoLog(
 					`${logPrefix} 发布成功，总耗时 ${formatElapsed(Date.now() - instanceStartTime)}.`,
 					"log-success"
 				);
@@ -2839,16 +2852,33 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 				return true;
 			})();
 				if (!instanceSuccess) {
-					isSuccess = false;
-					break;
+					failCount++;
+					// 手动停止时不打印「发布结束」分割线，避免误读为服务本身失败
+					if (!checkStop()) {
+						printInfoLog(
+							`════ 发布结束 · 第 ${publishIndex}/${totalInstanceCount} 个 ════`
+						);
+						printInfoLog(
+							`${ins.module}${ins.identity ? `（${ins.identity}）` : ""} @ ${serverInfo.name} 发布失败，继续发布后续服务实例.`,
+							"log-error"
+						);
+					}
+					continue;
 				}
+				successCount++;
 			}
-			if (!isSuccess) break;
 		}
-		if (isSuccess) {
-			printInfoLog(`发布总耗时：${formatElapsed(Date.now() - overallStartTime)}。`);
+		if (failCount > 0) {
+			printInfoLog(
+				`发布完成（部分失败）：成功 ${successCount} 个，失败 ${failCount} 个，共 ${totalInstanceCount} 个，总耗时 ${formatElapsed(Date.now() - overallStartTime)}.`,
+				"log-error"
+			);
+			return false;
 		}
-		return isSuccess;
+		printInfoLog(
+			`发布完成：成功 ${successCount} 个，共 ${totalInstanceCount} 个，发布总耗时：${formatElapsed(Date.now() - overallStartTime)}。`
+		);
+		return true;
 	};
 
 	// ==================== 获取程序集（与 home 同语义的独立实现） ====================

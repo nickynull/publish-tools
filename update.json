@@ -1,15 +1,15 @@
 {
-    "version": "1.6.3",
-    "notes": "<b>优化</b><br>• **STEP 发布单服务失败不再中断后续发布**：原实现中任一服务实例发布失败（停止/替换/启动任一步出错）即双层 `break` 终止全部剩余发布，服务器不存在或未配置程序集暂存路径更是直接 `return false` 结束整次发布。现改为：实例失败记错误日志后继续发布后续实例；服务器级配置问题跳过该服务器、继续发布后续服务器；结尾打印汇总「发布完成（部分失败）：成功 X 个，失败 Y 个，共 Z 个」。**整体失败判定保留**——任一实例失败时整次发布仍按失败返回（不影响调用方与后续步骤判断），手动停止仍立即中止全部发布<br>• **发布开始/结束日志加分割线与序号**：每个服务实例的发布日志块用 `════ 发布开始 · 第 X/Y 个 ════` 与 `════ 发布结束 · 第 X/Y 个 ════` 分割行包裹（X/Y 为本次待发布实例序号），分割行单独一行、服务信息另起一行——成功行 `[服务器(IP)] 模块(标识) 发布成功，总耗时 Ns.`（绿色）、失败行 `模块（标识） @ 服务器名 发布失败，继续发布后续服务实例.`（红色），多服务连续发布时边界一目了然。服务器端 `发布日志.log` 的逐条记录格式不变<br><b>注：版本 ≤ 0.0.28 <a style='color:green' target='_blank' href='https://github.com/nickynull/publish-tools/releases/download/v1.6.3/SmomPublish_1.6.3_x64-setup.exe'>点击此处</a> 下载。</b>",
-    "pub_date": "2026-11-02T11:07:53Z",
+    "version": "1.6.4",
+    "notes": "<b>功能</b><br>• 服务器列表支持列头排序（名称 / 服务环境 / IP / 账户 / SSH端口 / 所属项目），数据库层排序，取消排序回落默认<br>• 服务器「所属项目」查询改多选：不选＝不筛选，选具体项目只查所选，勾「全部项目」并入归属项目为空的服务器<br>• 归属项目文案统一为「全部项目」（查询框 / 列表 / 表单）<br><b>修复</b><br>• 服务器按名称查询为精确匹配，输入片段查不到数据，改为模糊匹配<br>• 服务器查询出错后 loading 不复位<br>• 服务器「重置」后列表未刷新<br>• 深色模式首次启动窗口白色背景闪眼（首帧前恢复深色底板，窗口等前端就绪后再显示）<br><b>注：版本 ≤ 0.0.28 <a style='color:green' target='_blank' href='https://github.com/nickynull/publish-tools/releases/download/v1.6.4/SmomPublish_1.6.4_x64-setup.exe'>点击此处</a> 下载。</b>",
+    "pub_date": "2026-11-03T05:43:33Z",
     "platforms": {
         "windows-x86_64": {
-            "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRRDNCN252RmdQejZoRjJVUzl1WjU2SEpja29BM0t5MGhyaDBGQnBmSXB5a1JiRjc5L3F0SEEvM1pTdlppS3R5dFRYazQxQ1RGSlVUQk9odU96T0V6ejd5clVDbU9pWmdrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNjE3NjI4CWZpbGU6U21vbVB1Ymxpc2hfMS42LjNfeDY0LXNldHVwLmV4ZQpONE1GUWxVU2c1R0Q1dkdZSXhjdkhXdDNXUklXeitTZStLMFY5REJteW84RWRJeUlKeHNScktTR0R4aTdoTml0bi9vS3dWcUJIYjBzRWdDbW15OThBdz09Cg==",
-            "url": "https://github.com/nickynull/publish-tools/releases/download/v1.6.3/SmomPublish_1.6.3_x64-setup.exe"
+            "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRRDNCN252RmdQejJUd29MQnpzS1ZObnlaYlp3WElKaUZEc2hiMnhKKzc1bnAvTVdHN1BrNjJqYVNjRDZ0UWZlZ2xDZFRKQzdweHlvdzJjQjlMK1RNbjhkQStHNTNwVGdrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNjg0NTg3CWZpbGU6U21vbVB1Ymxpc2hfMS42LjRfeDY0LXNldHVwLmV4ZQpxTW40NXNneHVSSEVEMnJuaGlaT1pIaFU2VXFJN0hlWHNSbVBXY08zMjVSYS9ReWFlWHh1cmtzV1ZyU242bnFTRmNtMHN5K0xHSmJyVmduSklka3NEUT09Cg==",
+            "url": "https://github.com/nickynull/publish-tools/releases/download/v1.6.4/SmomPublish_1.6.4_x64-setup.exe"
         },
         "windows-msi": {
-            "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRRDNCN252RmdQejJqV0R5ajZPRm1ISGZqVnd6VHphUlh3Mk1tU2FNNytFQmxYOS9DN1hYNTdlaThFK2dxUUEyV1RvWGdZTVBTc2xlQ3lCa1dyQm9IY0hVRm5JQjZ1Y0EwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNjE3NjI4CWZpbGU6U21vbVB1Ymxpc2hfMS42LjNfeDY0X3poLUNOLm1zaQowK29xZEpLeDNQY21NQWNWSHJNblZ6dmhxbGxBWVpXN09rLzVRbFZiekM2em9IY0p1bFVNQnl2TnR6SGt4b1ZlejgwbS92SlUrTHp0MHFPWC9OMFREZz09Cg==",
-            "url": "https://github.com/nickynull/publish-tools/releases/download/v1.6.3/SmomPublish_1.6.3_x64_zh-CN.msi"
+            "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRRDNCN252RmdQejNIczBuN0lhbDVhS2F5TlZVUnZKcjh6MWx4dkFCakJoYnF0U2pPUEZuSyt0amFsL1NEWUdwS1hvd1RSMHl3VkNRdzB6QVVkbzlMaFFWNHZlSWk0aWdZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNjg0NTg3CWZpbGU6U21vbVB1Ymxpc2hfMS42LjRfeDY0X3poLUNOLm1zaQorK1pwTk5SNm9SRFBSL0k3dkNKc1VWL3I3MVFuOUhOUzJyVEJQZ01sa0dYaUgvUnhyMDFMaWZKUEl1ZHZjZkdnZXhMVzgvNHB3cTk3QXlLLzUzVXRDZz09Cg==",
+            "url": "https://github.com/nickynull/publish-tools/releases/download/v1.6.4/SmomPublish_1.6.4_x64_zh-CN.msi"
         }
     }
 }

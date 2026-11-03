@@ -43,7 +43,8 @@
         "title": "SMOM平台发布工具",
         "width": 1270,
         "height": 750,
-        "useHttpsScheme": true
+        "useHttpsScheme": true,
+        "visible": false
       }
     ]
   }

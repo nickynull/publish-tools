@@ -4,6 +4,7 @@ import App from '@/App.vue';
 import router from '@/router';
 import { i18n } from '@/i18n/index';
 import other from '@/utils/other';
+import { cmdInvoke } from '@/utils/command';
 
 import ElementPlus from 'element-plus';
 import '@/theme/index.scss';
@@ -22,3 +23,9 @@ document.addEventListener('contextmenu', function (e) {
 });
 
 app.use(pinia).use(router).use(ElementPlus).use(i18n).use(VueGridLayout).mount('#app');
+
+// 窗口在 tauri.conf.json 中配置为 visible:false，等挂载完成（深色底板已就绪）再显示，
+// 避免 WebView2 加载期白底闪烁；命令幂等，前端异常时由 Rust 侧 3 秒兜底显示。
+const revealWindow = () => void cmdInvoke('show_main_window');
+revealWindow();
+window.setTimeout(revealWindow, 200);

@@ -60,15 +60,47 @@ export function useServerDb() {
         getServerList: async (params: GetServerTableParams) => {
             let dataSql = "select ts.id, ts.project_id projectId, tp.name projectName, ts.name, ts.os, ts.ip, ts.port, ts.account, ts.pwd, ts.description, ts.service_backup_path serviceBackupPath, ts.assembly_staging_path assemblyStagingPath, ts.default_server_paths defaultServerPaths, ts.upload_paths uploadPaths from t_server ts left join t_project tp on ts.project_id = tp.id";
             let totalSql = "select count(*) totalCount from t_server ts";
-            let where = " where 1=1 ";
             let orderBy = "";
-            if (params) {
-                if (params.projectId) where += " and (ts.project_id = $1 or ts.project_id is null) ";
-                if (params.name) where += " and ts.name = $2 ";
-                if (params.sorting) orderBy += ` order by ${params.sorting} `;
+            let where = " where 1=1 ";
+            // 归属项目筛选：
+            //   数组（查询页多选）= 只匹配所选项目，数组含 -1 时并上 project_id is null
+            //   单个数字（工作台/应用配置等既有调用方）= 该项目 + project_id is null（旧语义，保持兼容）
+            //   null / 0 / 空数组 = 不加项目筛选
+            const rawProjectId = params.projectId;
+            const isMulti = Array.isArray(rawProjectId);
+            const selectedProjects = isMulti
+                ? (rawProjectId as number[]).filter((id) => typeof id === "number")
+                : rawProjectId != null
+                    ? [rawProjectId as number]
+                    : [];
+            const projectIds = selectedProjects.filter((id) => id > 0);
+            const includeNullProject =
+                selectedProjects.includes(-1) || (!isMulti && projectIds.length > 0);
+
+            // 绑定值与占位符按条件顺序动态编号（多选项个数不定）
+            const filterBinds: any[] = [];
+            let placeholder = 1;
+
+            if (projectIds.length > 0) {
+                const placeholders = projectIds.map(() => `$${placeholder++}`);
+                filterBinds.push(...projectIds);
+                where += includeNullProject
+                    ? ` and (ts.project_id in (${placeholders.join(", ")}) or ts.project_id is null) `
+                    : ` and ts.project_id in (${placeholders.join(", ")}) `;
+            } else if (includeNullProject) {
+                // 未选具体项目但勾选了「全部项目」：只查没有归属项目的服务器
+                where += " and ts.project_id is null ";
             }
-            dataSql += where + orderBy;
-            dataSql += " LIMIT $3 OFFSET $4;";
+
+            // 名称模糊匹配：LIKE 不区分 ASCII 大小写；绑定值包装 %keyword%，并 trim 首尾空格
+            // 注意：不改写 params.name（外部对象与搜索框 v-model 共用），只在绑定值上包装
+            if (params.name) {
+                where += ` and ts.name like $${placeholder++} `;
+                filterBinds.push(`%${String(params.name).trim()}%`);
+            }
+            if (params.sorting) orderBy += ` order by ${params.sorting} `;
+
+            dataSql += where + orderBy + ` LIMIT $${placeholder} OFFSET $${placeholder + 1};`;
             totalSql += `${where};`;
 
             // 定义(默认)响应结果
@@ -80,15 +112,15 @@ export function useServerDb() {
                     total: 0,
                 },
             };
-            let bindValues = [params.projectId, params.name, params.maxResultCount, params.skipCount];
+            const dataBinds = [...filterBinds, params.maxResultCount, params.skipCount];
 
             try {
                 // 查询数量
-                let totalData = await (await db()).select<any>(totalSql, bindValues);
+                let totalData = await (await db()).select<any>(totalSql, filterBinds);
                 if (!totalData || totalData.length < 1 || totalData[0].totalCount < 1) return dataResult;
                 dataResult.data.total = totalData[0].totalCount;
                 // 查询数据
-                dataResult.data.data = await (await db()).select<RowServerType[]>(dataSql, bindValues);
+                dataResult.data.data = await (await db()).select<RowServerType[]>(dataSql, dataBinds);
                 // 解析默认服务标识/发布路径组 JSON + 文件管理路径
                 dataResult.data.data.forEach((server) => {
                     server.defaultServerPaths = parseServerPaths((server as any).defaultServerPaths);

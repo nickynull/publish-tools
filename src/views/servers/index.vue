@@ -12,15 +12,20 @@
             >
             </el-input>
           </el-col>
-          <el-col :span="6">
+          <el-col :span="8">
             <el-select
+              multiple
               filterable
               clearable
-              placeholder="请选择所属项目"
+              collapse-tags
+              collapse-tags-tooltip
+              placeholder="不筛选所属项目"
               size="default"
               v-model="state.tableData.param.projectId"
-              @clear="onSearch"
+              :value-on-clear="[]"
+              @change="onSearch"
             >
+              <el-option label="全部项目" :value="NULL_PROJECT_FILTER" />
               <el-option
                 v-for="project in projectList"
                 :key="project.id"
@@ -77,24 +82,26 @@
         </el-button>
       </template>
       <el-table
+        ref="tableRef"
         :data="state.tableData.data"
         v-loading="state.tableData.loading"
         style="width: 100%"
         @selection-change="handleSelectionChange"
+        @sort-change="onSortChange"
       >
         <el-table-column type="selection" width="50" />
         <el-table-column fixed type="index" label="序号" width="60" />
-        <el-table-column prop="name" label="服务器名称" width="180" />
-        <el-table-column prop="os" label="服务环境" width="100">
+        <el-table-column prop="name" label="服务器名称" width="180" sortable="custom" />
+        <el-table-column prop="os" label="服务环境" width="120" sortable="custom">
           <template #default="scope">
             {{ displayOs(scope.row.os) }}
           </template>
         </el-table-column>
-        <el-table-column prop="ip" label="IP地址" width="150" />
-        <el-table-column prop="account" label="登录账户" width="120" />
-        <el-table-column prop="port" label="SSH端口" width="120" />
+        <el-table-column prop="ip" label="IP地址" width="150" sortable="custom" />
+        <el-table-column prop="account" label="登录账户" width="120" sortable="custom" />
+        <el-table-column prop="port" label="SSH端口" width="120" sortable="custom" />
         <!-- <el-table-column prop="pwd" label="登录密码" width="120" /> -->
-        <el-table-column prop="projectName" label="所属项目名称" width="200">
+        <el-table-column prop="projectName" label="所属项目名称" width="200" sortable="custom">
           <template #default="scope">
             {{ scope.row.projectName ?? "全部项目" }}
           </template>
@@ -302,7 +309,25 @@ const ServerLogDialog = defineAsyncComponent(
 
 // 项目信息
 const projectList = ref<RowProjectType[]>();
+
+// ============ 列排序（el-table sort-change → SQL ORDER BY） ============
+// 排序列白名单：只允许映射表内的 prop 参与排序拼装，防 SQL 注入
+const SORT_COLUMN_MAP: Record<string, string> = {
+  name: "ts.name",
+  os: "ts.os",
+  ip: "ts.ip",
+  account: "ts.account",
+  port: "ts.port",
+  projectName: "tp.name",
+};
+/** 默认排序（取消排序/非法 prop 时回落） */
+const DEFAULT_SORTING = "ts.id DESC";
+
+// 所属项目筛选：空数组 = 不筛选（全部数据）；-1 = 「全部项目」（project_id is null）的服务器
+const NULL_PROJECT_FILTER = -1;
+
 // 服务器状态
+const tableRef = ref();
 const state = reactive<ServerState>({
   tableData: {
     data: [],
@@ -310,14 +335,26 @@ const state = reactive<ServerState>({
     loading: false,
     currentPage: 1,
     param: {
-      projectId: null,
+      projectId: [] as number[],
       name: null,
-      sorting: "ts.id DESC",
+      sorting: DEFAULT_SORTING,
       skipCount: 0,
       maxResultCount: 10,
     },
   },
 });
+
+// 列头排序变化：升/降序映射为白名单列的 ORDER BY 后回查；取消排序回落默认
+const onSortChange = async ({ prop, order }: { prop: string; order: string | null }) => {
+  const column = order ? SORT_COLUMN_MAP[prop] : undefined;
+  const nextSorting = column
+    ? `${column} ${order === "ascending" ? "ASC" : "DESC"}`
+    : DEFAULT_SORTING;
+  // 排序未变化（如 clearSort 回调）不重复查询
+  if (nextSorting === state.tableData.param.sorting) return;
+  state.tableData.param.sorting = nextSorting;
+  await getTableData();
+};
 
 // 服务发现
 const {
@@ -395,6 +432,14 @@ const onConfirmImport = async () => {
   let success = 0;
   const failedItems: string[] = [];
   const failMessages: string[] = [];
+  // 导入时归属项目：从多选筛选里取第一个真实项目 ID，忽略「全部项目」哨兵值
+  const filterProjectId = state.tableData.param.projectId;
+  const pickedProjectId = Array.isArray(filterProjectId)
+    ? filterProjectId.find((id) => typeof id === "number" && id > 0)
+    : typeof filterProjectId === "number" && filterProjectId > 0
+      ? filterProjectId
+      : undefined;
+  const importProjectId = pickedProjectId ?? projectList.value?.[0]?.id ?? null;
   for (const idx of selectedDiscoveryKeys.value) {
     const item = discoveryResults.value[idx];
     if (!item) continue;
@@ -402,7 +447,7 @@ const onConfirmImport = async () => {
     const desc = item.suggestedPublishPath ? `建议发布目录: ${item.suggestedPublishPath}` : `WorkingDir: ${item.rawPath || ''}（容器未挂载宿主机目录，请手动填写）`;
     const row: RowServerType = {
       id: null,
-      projectId: state.tableData.param.projectId ?? projectList.value?.[0]?.id ?? null,
+      projectId: importProjectId,
       projectName: null,
       name: item.serviceName,
       os: item.source === 'docker' ? 2 : 1,
@@ -681,11 +726,15 @@ const onSearch = async () => {
   await getTableData();
 };
 
-// 重置
+// 重置：清空名称与所属项目（不加筛选）并恢复默认排序，随后重新查询
 const onReset = async () => {
-  state.tableData.param.projectId = null;
+  state.tableData.param.projectId = [];
   state.tableData.param.name = null;
+  state.tableData.param.sorting = DEFAULT_SORTING;
+  state.tableData.currentPage = 1;
+  tableRef.value?.clearSort?.();
   await getProjectList();
+  await getTableData();
 };
 
 // 初始化表格数据
@@ -696,6 +745,7 @@ const getTableData = async () => {
 
   let dataResult = await serverDb.getServerList(state.tableData.param);
   if (dataResult.code !== 0) {
+    state.tableData.loading = false;
     ElMessage.error(dataResult.msg);
     return;
   }

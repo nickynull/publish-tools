@@ -2,7 +2,8 @@
 declare type GetServerTableParams = {
 	skipCount: number;
 	maxResultCount: number;
-	projectId: number | null;
+	/** 项目筛选：数组 = 多选（只匹配所选；含 -1 表示并上 project_id is null）；单个数字 = 该项目 + project_id is null；null/0/空数组 = 不筛选 */
+	projectId: number | number[] | null;
 	name: string | null;
 	sorting: string | null;
 }

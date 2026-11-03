@@ -5,6 +5,40 @@
     <link rel="icon" href="./public/favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SMOM平台发布工具</title>
+    <!--
+      首帧底板：样式表与 Vue 尚未就绪时用与主题一致的底色兜底，避免深色模式下白底闪眼。
+      样式表（app.scss 的 body/#app 背景）加载后自然接管。
+    -->
+    <style>
+      html {
+        background-color: #f8f8f8;
+      }
+      html[data-theme='dark'] {
+        background-color: #1f1f1f;
+        color-scheme: dark;
+      }
+    </style>
+    <script>
+      // 首帧前恢复深色模式：深色开关原本要等 setings.vue 挂载 100ms 后才写入 data-theme，这段空窗期会白屏
+      // 键名与 src/utils/storage.ts 的 Local.setKey 一致（`<包名>:themeConfig`），这里按后缀匹配避免写死包名
+      (function () {
+        try {
+          var raw = null;
+          for (var i = 0; i < localStorage.length; i++) {
+            var key = localStorage.key(i);
+            if (key && key.slice(-12) === ':themeConfig') {
+              raw = localStorage.getItem(key);
+              break;
+            }
+          }
+          if (!raw) return;
+          var cfg = JSON.parse(raw);
+          if (cfg && cfg.isIsDark) document.documentElement.setAttribute('data-theme', 'dark');
+        } catch (e) {
+          /* 缓存异常时按浅色启动，不影响应用 */
+        }
+      })();
+    </script>
   </head>
 
   <body>

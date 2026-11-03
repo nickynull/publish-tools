@@ -51,7 +51,7 @@
                         <el-form-item label="所属项目" prop="projectId">
                             <el-select filterable placeholder="请选择所属项目" size="default"
                                 v-model="state.ruleForm.projectId">
-                                <el-option label="全部（所有项目可用）" :value="0" />
+                                <el-option label="全部项目" :value="0" />
                                 <el-option v-for="project in projectList" :key="project.id" :label="project.name"
                                     :value="project.id" />
                             </el-select>
@@ -413,7 +413,7 @@ const onDetectFolders = async () => {
 
 // 表单验证规则
 const formRules = reactive<FormRules>({
-    projectId: [{ required: true, message: "请选择所属项目（可选「全部」）！", trigger: "change" }],
+    projectId: [{ required: true, message: "请选择所属项目（可选「全部项目」）！", trigger: "change" }],
     name: [{ required: true, message: "请选择服务器名称！", trigger: "blur" }],
     os: [{ required: true, message: "请选择系统！", trigger: "blur" }],
     ip: [{ required: true, message: "请输入IP地址！", trigger: "blur" }],
@@ -438,7 +438,7 @@ const submitValidate = async (formEl: FormInstance | undefined) => {
 const openDialog = async (type: string, row: RowServerType) => {
     /* Start: 重置表单内容 */
     state.ruleForm = getDefaultSubObject(state.ruleForm);
-    // projectId 0 = 全部（所有项目可用），新增时默认；null 视为全部
+    // projectId 0 = 全部项目（所有项目可用），新增时默认；null 视为全部项目
     if (state.ruleForm.projectId == null) state.ruleForm.projectId = 0;
     if (state.ruleForm.os == 0) state.ruleForm.os = 1;
     if (state.ruleForm.port == 0) state.ruleForm.port = 22;
@@ -453,7 +453,7 @@ const openDialog = async (type: string, row: RowServerType) => {
             state.dialog.type = "edit";
             state.dialog.editId = row.id;
             Object.assign(state.ruleForm, row);
-            // 存量数据 project_id 为 null 的服务器按「全部」回显
+            // 存量数据 project_id 为 null 的服务器按「全部项目」回显
             if (state.ruleForm.projectId == null) state.ruleForm.projectId = 0;
             if (!Array.isArray(state.ruleForm.defaultServerPaths)) state.ruleForm.defaultServerPaths = [];
             // 数组深拷贝一份，避免弹窗内增删直接改到列表行数据
@@ -492,7 +492,7 @@ const onSubmit = async () => {
         uploadPathKeys.add(key);
         return true;
     }).map((path) => path.trim());
-    // projectId 0 = 全部，落库为 null（查询时按 project_id is null 带出）
+    // projectId 0 = 全部项目，落库为 null（查询时按 project_id is null 带出）
     if (state.ruleForm.projectId === 0) state.ruleForm.projectId = null;
     if (state.dialog.type == "edit") {
         // 修改

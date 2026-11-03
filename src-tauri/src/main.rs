@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::process;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
 use SmomPublish::cmd_module::auto_start_module;
 use SmomPublish::cmd_module::cancel;
@@ -14,6 +15,26 @@ use SmomPublish::cmd_module::wpf_upgrade_module;
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("你好, {}! 欢迎来到 Rust!", name)
+}
+
+/// 窗口是否已被前端首次显示（防重复 show / 兜底线程判断用）
+static WINDOW_REVEALED: AtomicBool = AtomicBool::new(false);
+/// 是否为开机自启（--autostart）启动：该场景静默驻留托盘，前端不得把窗口显示出来
+static AUTOSTART_LAUNCH: AtomicBool = AtomicBool::new(false);
+
+/// 显示主窗口：由前端首帧渲染完成后调用
+/// 窗口在 tauri.conf.json 中配置为 visible:false，避免 WebView2 加载期的白色底板闪现
+#[tauri::command]
+fn show_main_window(app_handle: tauri::AppHandle) {
+    if AUTOSTART_LAUNCH.load(Ordering::SeqCst) {
+        WINDOW_REVEALED.store(true, Ordering::SeqCst);
+        return;
+    }
+    if let Some(window) = app_handle.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        WINDOW_REVEALED.store(true, Ordering::SeqCst);
+    }
 }
 
 // 退出应用程序
@@ -105,10 +126,23 @@ fn main() {
             SmomPublish::mcp::manager::init(app.handle());
 
             // 开机自启（--autostart）场景：静默驻留系统托盘，不显示主窗口
-            if std::env::args().any(|arg| arg == "--autostart") {
+            let autostart = std::env::args().any(|arg| arg == "--autostart");
+            if autostart {
+                AUTOSTART_LAUNCH.store(true, Ordering::SeqCst);
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.hide();
                 }
+            } else {
+                // 兜底：前端加载异常未能调用 show_main_window 时，3 秒后强制显示，避免应用启动后看不见
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    if !WINDOW_REVEALED.load(Ordering::SeqCst) {
+                        if let Some(window) = handle.get_webview_window("main") {
+                            let _ = window.show();
+                        }
+                    }
+                });
             }
 
             Ok(())
@@ -117,6 +151,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             greet,
             exit_app,
+            show_main_window,
             auto_start_module::get_auto_start,
             auto_start_module::set_auto_start,
             get_mcp_config,

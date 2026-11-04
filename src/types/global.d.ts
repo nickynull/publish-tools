@@ -153,7 +153,7 @@ declare type LogPrintType = {
 	// 操作分隔线标记：为 true 时该行渲染为一条分割线（用于区分不同功能操作的日志区间）
 	divider?: boolean;
 	content: LogContentType;
-	type: "log-info" | "log-warning" | "log-error" | "log-success";
+	type: "log-info" | "log-warning" | "log-error" | "log-success" | "log-primary";
 };
 
 // 日志内容

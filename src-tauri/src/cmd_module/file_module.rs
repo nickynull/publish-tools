@@ -2482,7 +2482,7 @@ pub async fn copy_non_sie_dlls(src_dir: &str, dest_dir: &str) -> Result<bool, St
 }
 
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::SystemTime;
 
 /// 将通配符模式转换为正则表达式
@@ -2677,6 +2677,186 @@ pub async fn read_dlls_by_name(dir: &str, patterns: &str) -> Result<Vec<String>,
         }
     }
     Ok(dll_files)
+}
+
+/// WpfClient 程序集收集结果
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectWpfResult {
+    /// 命中规则的 dll 数（按来源累计，去重前）
+    pub scanned: usize,
+    /// 同名去重淘汰数
+    pub duplicates: usize,
+    /// 投放到 UI 目录的数量
+    pub ui_copied: usize,
+    /// 投放到服务（Domain）目录的数量
+    pub service_copied: usize,
+}
+
+/// 收集 WpfClient 的 SIE 程序集
+///
+/// 从多个来源目录（客户端生成路径根、Domain、UI）顶层收集 `SIE.*.dll`：
+/// - `SIE.Wpf.*.dll`（不含 `SIE.Wpf.dll`）→ UI 程序集 → `ui_target`
+/// - 其余 `SIE.*.dll`（不含 `SIE.dll`、`SIE.MOM.dll`）→ 服务程序集 → `service_target`
+/// 同名文件（忽略大小写）取修改时间最新的；`ui_target`/`service_target` 为 `None` 表示不收集该类。
+///
+/// # 参数
+/// - `source_dirs`: 来源目录（不存在的直接跳过，只扫顶层，不递归）
+/// - `ui_target` / `service_target`: 投放目标目录
+/// - `allowed_names`: 允许的文件名清单（TFS/Git 变更清单用），`None` 表示不限
+/// - `patterns`: DLL 名称模式文本（支持 * ? 通配符、顿号分隔），`None` 表示不限
+/// - `start_time` / `end_time`: 修改时间范围（`%Y-%m-%d %H:%M:%S`，本地时区），`None` 表示不限
+#[tauri::command]
+pub async fn collect_wpf_assemblies(
+    source_dirs: Vec<String>,
+    ui_target: Option<String>,
+    service_target: Option<String>,
+    allowed_names: Option<Vec<String>>,
+    patterns: Option<String>,
+    start_time: Option<String>,
+    end_time: Option<String>,
+) -> Result<CollectWpfResult, String> {
+    const TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
+    let start_date = match start_time.as_deref() {
+        Some(text) if !text.trim().is_empty() => Some(
+            NaiveDateTime::parse_from_str(text.trim(), TIME_FORMAT)
+                .map_err(|e| format!("解析开始时间失败: {}", e))?,
+        ),
+        _ => None,
+    };
+    let end_date = match end_time.as_deref() {
+        Some(text) if !text.trim().is_empty() => Some(
+            NaiveDateTime::parse_from_str(text.trim(), TIME_FORMAT)
+                .map_err(|e| format!("解析结束时间失败: {}", e))?,
+        ),
+        _ => None,
+    };
+    let regex_patterns = match patterns.as_deref() {
+        Some(text) if !text.trim().is_empty() => {
+            let patterns_parsed = parse_patterns(text);
+            if patterns_parsed.is_empty() {
+                return Err("未提供有效的DLL匹配模式".to_string());
+            }
+            Some(patterns_parsed)
+        }
+        _ => None,
+    };
+    let allowed: Option<HashSet<String>> =
+        allowed_names.map(|names| names.into_iter().map(|n| n.to_lowercase()).collect());
+
+    // 排除项（大小写不敏感）：SIE.dll、SIE.MOM.dll、SIE.Wpf.dll
+    const EXCLUDED: [&str; 3] = ["sie.dll", "sie.mom.dll", "sie.wpf.dll"];
+
+    // 去重表：小写文件名 -> (mtime, 源路径, 是否 UI 程序集)
+    let mut latest: HashMap<String, (SystemTime, PathBuf, bool)> = HashMap::new();
+    let mut scanned = 0usize;
+    let mut duplicates = 0usize;
+
+    for source_dir in &source_dirs {
+        let src = Path::new(source_dir);
+        if !src.is_dir() {
+            continue;
+        }
+        for entry in fs::read_dir(src).map_err(|e| format!("无法读取来源目录 {:?}: {}", src, e))? {
+            let entry = entry.map_err(|e| format!("读取目录项失败: {}", e))?;
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let file_name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(name) => name,
+                None => continue,
+            };
+            let lower = file_name.to_lowercase();
+            if !lower.ends_with(".dll") || EXCLUDED.contains(&lower.as_str()) {
+                continue;
+            }
+            // 分类：SIE.Wpf.* 为 UI 程序集，其余 SIE.* 为服务程序集，非 SIE. 前缀忽略
+            let is_ui = lower.starts_with("sie.wpf.");
+            if !is_ui && !lower.starts_with("sie.") {
+                continue;
+            }
+            if let Some(allowed_set) = &allowed {
+                if !allowed_set.contains(&lower) {
+                    continue;
+                }
+            }
+            if let Some(regexes) = &regex_patterns {
+                if !regexes.iter().any(|re| re.is_match(file_name)) {
+                    continue;
+                }
+            }
+            let mtime = fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+            if start_date.is_some() || end_date.is_some() {
+                let file_time = DateTime::<Local>::from(mtime).naive_local();
+                if let Some(start) = start_date {
+                    if file_time < start {
+                        continue;
+                    }
+                }
+                if let Some(end) = end_date {
+                    if file_time > end {
+                        continue;
+                    }
+                }
+            }
+            scanned += 1;
+            // 同名（忽略大小写）保留修改时间最新的
+            match latest.get(&lower) {
+                Some((existing_mtime, _, _)) if mtime <= *existing_mtime => {
+                    duplicates += 1;
+                    continue;
+                }
+                Some(_) => {
+                    duplicates += 1;
+                }
+                None => {}
+            }
+            latest.insert(lower, (mtime, path, is_ui));
+        }
+    }
+
+    let mut ui_copied = 0usize;
+    let mut service_copied = 0usize;
+    for (_, (_, src_path, is_ui)) in latest {
+        let target = if is_ui {
+            ui_target.as_deref()
+        } else {
+            service_target.as_deref()
+        };
+        let target = match target {
+            Some(text) if !text.trim().is_empty() => text,
+            _ => continue,
+        };
+        let target_path = Path::new(target);
+        fs::create_dir_all(target_path)
+            .map_err(|e| format!("无法创建目标目录 {:?}: {}", target_path, e))?;
+        let dest_path = target_path.join(
+            src_path
+                .file_name()
+                .ok_or_else(|| "无法获取文件名".to_string())?,
+        );
+        fs::copy(&src_path, &dest_path).map_err(|e| {
+            format!(
+                "复制文件 {:?} 到 {:?} 失败: {}",
+                src_path, dest_path, e
+            )
+        })?;
+        if is_ui {
+            ui_copied += 1;
+        } else {
+            service_copied += 1;
+        }
+    }
+
+    Ok(CollectWpfResult {
+        scanned,
+        duplicates,
+        ui_copied,
+        service_copied,
+    })
 }
 
 /// 通过 vswhere 查找 TF.exe 路径

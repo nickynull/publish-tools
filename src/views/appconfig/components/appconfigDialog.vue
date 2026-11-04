@@ -207,7 +207,7 @@
                     inline-prompt active-text="开启" inactive-text="关闭" size="default" />
                 </el-tooltip>
               </el-form-item>
-              <el-form-item label="发布前预检" prop="isPreflight">
+              <el-form-item v-if="props.showPreflight" label="发布前预检" prop="isPreflight">
                 <el-tooltip content="开启后，[一键发布]/[手动发布]会先做一次预检（配置完整性、MSBuild 路径、服务器连通性）；有错误则阻断发布"
                   placement="bottom" effect="light">
                   <el-switch v-model="state.ruleForm.configItems.isPreflight" :active-value="1" :inactive-value="0"
@@ -588,6 +588,11 @@ import { getDefaultSubObject, removeSlash } from "@/utils/other";
 
 // 定义子组件向父组件传值/事件
 const emit = defineEmits(["refresh", "environment-change", "project-change"]);
+
+// 定义父组件传值
+// showPreflight：是否显示「发布前预检」开关。该配置只被主页发布（一键/手动）消费，
+// 项目发布(STEP) 打开弹窗时传 false 隐藏，避免无效设置项干扰
+const props = withDefaults(defineProps<{ showPreflight?: boolean }>(), { showPreflight: true });
 
 // 引入应用配置管理数据库
 const appconfigDb = useAppconfigDb();

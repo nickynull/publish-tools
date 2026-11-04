@@ -1169,12 +1169,28 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 				// 重新打包压缩（压缩过程由后端进度事件刷新文件数进度）
 				const compressLogIndex = printInfoLog(`正在压缩 ${dirName}.zip ...`);
 				let compresseResult: any;
+				// 压缩方式（与旧版发布逻辑对齐）：
+				//  新版 Plugins/Lib → zip_dir 整目录压缩（内容平铺）
+				//  旧版 Plugins     → compress_zip [Domain, UI] 合并压缩
+				//  其余             → compress_zip 压缩目录本身（保留顶层目录名）
+				const compressDesc =
+					isNewVersion && (dirName == "Plugins" || dirName == "Lib")
+						? "整目录压缩"
+						: !isNewVersion && dirName == "Plugins"
+							? "Domain + UI 合并压缩"
+							: "压缩目录本身";
 				setProgressTarget(compressLogIndex, "");
 				try {
-					if (dirName == "Plugins" || dirName == "Lib") {
+					if (isNewVersion && (dirName == "Plugins" || dirName == "Lib")) {
 						compresseResult = await cmdInvoke("zip_dir", {
 							srcDir: `${removeSlash(packDir)}/${dirName}`,
 							dstFile: `${removeSlash(packDir)}/${dirName}.zip`,
+						});
+					} else if (!isNewVersion && dirName == "Plugins") {
+						// 旧版结构：Plugins.zip = Domain + UI 两个目录合并压缩（本地没有 Plugins 目录）
+						compresseResult = await cmdInvoke("compress_zip", {
+							filePaths: [`${removeSlash(packDir)}/Domain`, `${removeSlash(packDir)}/UI`],
+							dstFile: `${removeSlash(packDir)}/Plugins.zip`,
 						});
 					} else {
 						compresseResult = await cmdInvoke("compress_zip", {
@@ -1191,7 +1207,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 					return false;
 				}
 				printInfoLog(
-					`已合并本地生成目录并重新打包 ${dirName}.zip（${dirName == "Plugins" || dirName == "Lib" ? "整目录压缩" : "压缩目录本身"}），耗时 ${formatElapsed(Date.now() - mergeStartTime)}.`,
+					`已合并本地生成目录并重新打包 ${dirName}.zip（${compressDesc}），耗时 ${formatElapsed(Date.now() - mergeStartTime)}.`,
 					"log-success"
 				);
 
@@ -1208,14 +1224,33 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 					printInfoLog(`已将 Manifest.xml 中 ${dirName} 模块的版本号更新为 ${upgradeVersionResult.data}.`, "log-success");
 
 				// 清理解压的中间目录，仅保留 zip 与 Manifest.xml
-				const unzippedDir = `${removeSlash(packDir)}/${dirName}`;
-				const unzippedDirExists = await cmdInvoke("exists", { path: unzippedDir });
-				if (unzippedDirExists.code === 0) {
-					await cmdInvoke("delete_paths", { paths: [unzippedDir] });
+				// 旧版 Plugins 的中间目录是 Domain/UI（本地不存在 Plugins 目录）
+				const cleanupDirs =
+					!isNewVersion && dirName == "Plugins"
+						? [`${removeSlash(packDir)}/Domain`, `${removeSlash(packDir)}/UI`]
+						: [`${removeSlash(packDir)}/${dirName}`];
+				for (const cleanupDir of cleanupDirs) {
+					const cleanupDirExists = await cmdInvoke("exists", { path: cleanupDir });
+					if (cleanupDirExists.code === 0) {
+						await cmdInvoke("delete_paths", { paths: [cleanupDir] });
+					}
 				}
 				printInfoLog(
 					`[${dirName}.zip] 处理完成，总耗时 ${formatElapsed(Date.now() - zipStartTime)}.`
 				);
+			}
+
+			// 收尾清理：packDir 只保留 Manifest.xml 与各 .zip 产物
+			// 旧版结构把 zip 解压到 packDir 根目录，平铺 zip 会散落文件，这里统一兜底清掉
+			const packDirEntries = await readDirFiles(packDir);
+			const leftovers = packDirEntries.filter(
+				(name) => name !== "Manifest.xml" && !name.toLowerCase().endsWith(".zip")
+			);
+			if (leftovers.length > 0) {
+				printInfoLog(`清理打包目录残留（${leftovers.length} 项）：${leftovers.join("、")}...`);
+				for (const leftover of leftovers) {
+					await cmdInvoke("delete_paths", { paths: [`${removeSlash(packDir)}/${leftover}`] });
+				}
 			}
 
 			printInfoLog(`步骤 4/4：打包完成，产出目录：${packDir}`);
@@ -3220,10 +3255,19 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 				if (!tfsDllFiles || tfsDllFiles.length < 1) return false;
 				printInfoLog(`  TFS 变更文件清单共 ${tfsDllFiles.length} 个，开始逐个复制.`);
 				const tfsProgressIndex = printInfoLog(`  复制文件：`);
+				// copy_path 对不存在的源文件会静默忽略并返回成功，这里先按客户端生成路径的实际文件清单过滤，如实统计复制/跳过数
+				const tfsFileSet = new Set(await readDirFiles(removeSlash(appConfig.clientPath)));
+				let tfsCopiedCount = 0;
+				let tfsSkippedCount = 0;
 				for (let o = 0; o < tfsDllFiles.length; o++) {
 					if (checkStop()) return false;
 					const tfsDllFile = tfsDllFiles[o];
 					const clientPath = removeSlash(appConfig.clientPath);
+					if (!tfsFileSet.has(tfsDllFile)) {
+						tfsSkippedCount++;
+						updateLogProgress(tfsProgressIndex, "", o + 1, tfsDllFiles.length);
+						continue;
+					}
 					copyResult = await cmdInvoke("copy_path", {
 						source: `${clientPath}/${tfsDllFile}`,
 						destination: `${removeSlash(outPath)}/${tfsDllFile}`,
@@ -3233,7 +3277,17 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 						printInfoLog(`  复制失败：${tfsDllFile}`, "log-error");
 						break;
 					}
+					tfsCopiedCount++;
 					updateLogProgress(tfsProgressIndex, "", o + 1, tfsDllFiles.length);
+				}
+				printInfoLog(
+					`  复制完成：实际复制 ${tfsCopiedCount} 个，源不存在跳过 ${tfsSkippedCount} 个（清单共 ${tfsDllFiles.length} 个）.`
+				);
+				if (tfsCopiedCount < 1) {
+					printInfoLog(
+						`  变更清单中没有任何文件存在于[客户端生成路径]顶层，可能尚未编译，或变更均不属于该模块.`,
+						"log-warning"
+					);
 				}
 			} else if (appconfigData.dllMode == "Git") {
 				if (!appconfigData.dllModeValue) {
@@ -3247,10 +3301,19 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 				if (!gitDllFiles || gitDllFiles.length < 1) return false;
 				printInfoLog(`  Git 变更文件清单共 ${gitDllFiles.length} 个，开始逐个复制.`);
 				const gitProgressIndex = printInfoLog(`  复制文件：`);
+				// copy_path 对不存在的源文件会静默忽略并返回成功，这里先按客户端生成路径的实际文件清单过滤，如实统计复制/跳过数
+				const gitFileSet = new Set(await readDirFiles(removeSlash(appConfig.clientPath)));
+				let gitCopiedCount = 0;
+				let gitSkippedCount = 0;
 				for (let o = 0; o < gitDllFiles.length; o++) {
 					if (checkStop()) return false;
 					const gitDllFile = gitDllFiles[o];
 					const clientPath = removeSlash(appConfig.clientPath);
+					if (!gitFileSet.has(gitDllFile)) {
+						gitSkippedCount++;
+						updateLogProgress(gitProgressIndex, "", o + 1, gitDllFiles.length);
+						continue;
+					}
 					copyResult = await cmdInvoke("copy_path", {
 						source: `${clientPath}/${gitDllFile}`,
 						destination: `${removeSlash(outPath)}/${gitDllFile}`,
@@ -3260,7 +3323,17 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 						printInfoLog(`  复制失败：${gitDllFile}`, "log-error");
 						break;
 					}
+					gitCopiedCount++;
 					updateLogProgress(gitProgressIndex, "", o + 1, gitDllFiles.length);
+				}
+				printInfoLog(
+					`  复制完成：实际复制 ${gitCopiedCount} 个，源不存在跳过 ${gitSkippedCount} 个（清单共 ${gitDllFiles.length} 个）.`
+				);
+				if (gitCopiedCount < 1) {
+					printInfoLog(
+						`  变更清单中没有任何文件存在于[客户端生成路径]顶层，可能尚未编译，或变更均不属于该模块.`,
+						"log-warning"
+					);
 				}
 			} else if (appconfigData.dllMode == "DLL名称") {
 				const patterns = getDllModePatterns();
@@ -3303,12 +3376,126 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 			printInfoLog(`获取程序集 ${appTypeName} 出错：${JSON.stringify(error)}`, "log-error");
 			return false;
 		}
-		// 验证是否为空文件夹
-		const dirEmptyResult = await cmdInvoke("is_dir_empty", { path: outPath });
-		if (dirEmptyResult.code !== 0) {
+		// 统计输出目录实际文件数（read_files 只读顶层，与各复制命令的取文件范围一致）
+		const copiedFiles = await readDirFiles(outPath);
+		if (copiedFiles.length < 1) {
 			printInfoLog(`输出路径为空：${outPath}.`, "log-warning");
 		} else {
-			printInfoLog(`获取程序集 ${appTypeName} 成功，耗时 ${formatElapsed(Date.now() - stepStartTime)}.`, "log-success");
+			printInfoLog(
+				`获取程序集 ${appTypeName} 成功：共 ${copiedFiles.length} 个文件，耗时 ${formatElapsed(Date.now() - stepStartTime)}.`,
+				"log-success"
+			);
+		}
+		return true;
+	};
+
+	/**
+	 * 收集 WpfClient 的 SIE 程序集
+	 * 来源（3 个，均只扫顶层）：客户端生成路径/、/Domain、/UI（/Plugins 是旧流程的暂存目录，不作来源）
+	 * 分类：SIE.Wpf.*.dll（不含 SIE.Wpf.dll）→ UI 程序集；其余 SIE.*.dll（不含 SIE.dll、SIE.MOM.dll）→ 服务程序集
+	 * 投放：旧版 UI→<输出>/UI、服务→<输出>/Domain；新版两者都进 <输出>/Plugins（是否产出仍由生成目录勾选决定）
+	 * 去重：同名（忽略大小写）取修改时间最新的
+	 */
+	const collectWpfSieAssemblies = async (
+		appConfig: WpfClientConfigType,
+		generateDirArr: string[],
+		outPath: string
+	) => {
+		const appconfigData = ctx.appconfigData();
+		const isNewVersion = Boolean(appconfigData.configItems.isNewVersion);
+		const clientBase = removeSlash(String(appConfig.clientPath));
+		const outputBase = removeSlash(outPath);
+		const wantUi = generateDirArr.includes(isNewVersion ? "Plugins" : "UI");
+		const wantService = generateDirArr.includes(isNewVersion ? "Plugins" : "Domain");
+		const uiTargetPath = isNewVersion ? `${outputBase}/Plugins` : `${outputBase}/UI`;
+		const serviceTargetPath = isNewVersion ? `${outputBase}/Plugins` : `${outputBase}/Domain`;
+
+		printInfoLog(`  SIE 程序集来源（3 个）：${clientBase}  ;  ${clientBase}/Domain  ;  ${clientBase}/UI`);
+		if (!wantUi && !wantService) {
+			printInfoLog(
+				`  生成目录未勾选 ${isNewVersion ? "Plugins" : "UI/Domain"}，跳过 SIE 程序集收集.`,
+				"log-warning"
+			);
+			return true;
+		}
+		const targetText = [
+			wantUi ? `UI→${uiTargetPath}` : "",
+			wantService ? `服务→${serviceTargetPath}` : "",
+		]
+			.filter(Boolean)
+			.join("；");
+		printInfoLog(`  SIE 程序集投放：${targetText}`);
+
+		// 先收集后过滤：按[获取dll方式]生成过滤条件
+		const dllMode = appconfigData.dllMode;
+		let allowedNames: string[] | null = null;
+		let patterns = "";
+		let startTime = "";
+		let endTime = "";
+		if (dllMode == "TFS") {
+			if (!appconfigData.dllModeValue) {
+				printInfoLog(`未配置TFS获取程序集的相关信息，请检查.`, "log-error");
+				return false;
+			}
+			const selectTfsItem = JSON.parse(appconfigData.dllModeValue) as SelectTfsType;
+			printInfoLog(`  获取 TFS 变更文件清单（同一配置本次运行只查询一次）...`);
+			const tfsDllFiles = await getTfsDllFiles(selectTfsItem);
+			if (!tfsDllFiles) {
+				printInfoLog(`获取 TFS 变更文件清单失败，请检查 TFS 配置.`, "log-error");
+				return false;
+			}
+			allowedNames = tfsDllFiles;
+			printInfoLog(`  变更文件清单共 ${allowedNames.length} 个，按清单过滤.`);
+		} else if (dllMode == "DLL名称") {
+			patterns = getDllModePatterns();
+			if (!patterns) {
+				printInfoLog(`未配置DLL名称获取程序集的相关信息，请检查.`, "log-error");
+				return false;
+			}
+			printInfoLog(`  按 DLL 名称模式过滤.`);
+		} else {
+			const dateRange = getDllModeDateRange();
+			if (dateRange.length === 2) {
+				startTime = dateRange[0];
+				endTime = dateRange[1];
+				printInfoLog(`  按修改时间筛选（${startTime} ~ ${endTime}）.`);
+			}
+		}
+
+		const collectResult = await cmdInvoke("collect_wpf_assemblies", {
+			sourceDirs: [clientBase, `${clientBase}/Domain`, `${clientBase}/UI`],
+			uiTarget: wantUi ? uiTargetPath : null,
+			serviceTarget: wantService ? serviceTargetPath : null,
+			allowedNames,
+			patterns: patterns || null,
+			startTime: startTime || null,
+			endTime: endTime || null,
+		});
+		if (collectResult.code !== 0) {
+			printInfoLog(`收集 SIE 程序集失败：${collectResult.data}.`, "log-error");
+			return false;
+		}
+		const summary = (collectResult.data || {}) as {
+			scanned?: number;
+			duplicates?: number;
+			uiCopied?: number;
+			serviceCopied?: number;
+		};
+		printInfoLog(
+			`  SIE 程序集收集完成：命中 ${summary.scanned ?? 0} 个，同名去重 ${summary.duplicates ?? 0} 个，UI 投放 ${summary.uiCopied ?? 0} 个，服务投放 ${summary.serviceCopied ?? 0} 个.`,
+			"log-success"
+		);
+		if (wantUi && !summary.uiCopied) {
+			printInfoLog(
+				`  未收集到 UI 程序集（SIE.Wpf.*.dll），请确认客户端已编译、且来源目录存在对应 DLL.`,
+				"log-warning"
+			);
+		}
+		if (wantService && !summary.serviceCopied) {
+			printInfoLog(
+				`  未收集到服务程序集（SIE.*.dll），请确认客户端已编译、且来源目录存在对应 DLL.`,
+				"log-warning"
+			);
 		}
 		return true;
 	};
@@ -3345,27 +3532,31 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 
 		try {
 			let dllModeDateRange = getDllModeDateRange();
-			// 1.[生成目录]
+			// [生成目录]：决定产出哪些目录
 			let generateDirArr = JSON.parse(appConfig.generateDirJson);
 			printInfoLog(`  生成目录（${generateDirArr.length}个）：${generateDirArr.join("、")}`);
+			// 1.[SIE 程序集]：3 个来源统一收集（SIE.Wpf.* → UI、其余 SIE.* → 服务；旧版分投 UI/Domain，新版都进 Plugins）
+			if (!(await collectWpfSieAssemblies(appConfig, generateDirArr, outPath))) return false;
+
+			// 2.[其余生成目录]：UI / Domain / Plugins 已由 SIE 收集产出，不再逐目录拷贝
 			for (let i = 0; i < generateDirArr.length; i++) {
 				const generateDir = generateDirArr[i];
+				if (generateDir == "UI" || generateDir == "Domain" || generateDir == "Plugins") continue;
 				// 验证目录是否存在
 				const dirPath = `${removeSlash(appConfig.clientPath)}/${generateDir}`;
-				if (generateDir == "Plugins" || generateDir == "Lib") {
-					printInfoLog(`  [${generateDir}]：清空后从客户端生成路径重新收集 DLL（${generateDir == "Plugins" ? "copy_sie_dlls：仅 SIE. 开头的 DLL" : "copy_non_sie_dlls：非 SIE. 开头的 DLL"}）...`);
+				if (generateDir == "Lib") {
+					printInfoLog(`  [Lib]：清空后从客户端生成路径重新收集非 SIE. 开头的 DLL（copy_non_sie_dlls）...`);
 					await cmdInvoke("delete_paths", { paths: [dirPath] });
 					await createDir(dirPath);
-					let cmdName = generateDir == "Plugins" ? "copy_sie_dlls" : "copy_non_sie_dlls";
-					let copyDllFileResult = await cmdInvoke(cmdName, {
+					let copyDllFileResult = await cmdInvoke("copy_non_sie_dlls", {
 						srcDir: removeSlash(appConfig.clientPath),
 						destDir: dirPath,
 					});
 					if (copyDllFileResult.code !== 0) {
-						printInfoLog(`${generateDir}目录不存在，请检查路径或编译项目试试.`, "log-error");
+						printInfoLog(`Lib目录不存在，请检查路径或编译项目试试.`, "log-error");
 						return false;
 					}
-					printInfoLog(`  [${generateDir}]：DLL 重新收集完成.`);
+					printInfoLog(`  [Lib]：DLL 重新收集完成.`);
 				}
 				const dirPathExists = await cmdInvoke("exists", { path: dirPath });
 				if (dirPathExists.code !== 0) {
@@ -3389,11 +3580,20 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 					if (!tfsDllFiles || tfsDllFiles.length < 1) return false;
 					printInfoLog(`  [${generateDir}]：变更文件清单共 ${tfsDllFiles.length} 个，开始逐个复制.`);
 					const dirProgressIndex = printInfoLog(`  [${generateDir}] 复制文件：`);
+					// copy_path 对不存在的源文件会静默忽略并返回成功，这里先按生成目录的实际文件清单过滤，如实统计复制/跳过数
+					const dirFileSet = new Set(await readDirFiles(dirPath));
+					let copiedCount = 0;
+					let skippedCount = 0;
 
 					for (let j = 0; j < tfsDllFiles.length; j++) {
 						if (checkStop()) return false;
 						const tfsDllFile = tfsDllFiles[j];
 						const clientPath = removeSlash(dirPath);
+						if (!dirFileSet.has(tfsDllFile)) {
+							skippedCount++;
+							updateLogProgress(dirProgressIndex, "", j + 1, tfsDllFiles.length);
+							continue;
+						}
 						copyResult = await cmdInvoke("copy_path", {
 							source: `${clientPath}/${tfsDllFile}`,
 							destination: `${toGenerateDir}/${tfsDllFile}`,
@@ -3403,7 +3603,17 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 							printInfoLog(`  复制失败：${tfsDllFile}`, "log-error");
 							break;
 						}
+						copiedCount++;
 						updateLogProgress(dirProgressIndex, "", j + 1, tfsDllFiles.length);
+					}
+					printInfoLog(
+						`  [${generateDir}] 复制完成：实际复制 ${copiedCount} 个，源不存在跳过 ${skippedCount} 个（清单共 ${tfsDllFiles.length} 个）.`
+					);
+					if (copiedCount < 1) {
+						printInfoLog(
+							`  [${generateDir}] 变更清单中没有任何文件存在于该生成目录，可能尚未编译，或变更均不属于客户端模块.`,
+							"log-warning"
+						);
 					}
 				} else if (appconfigData.dllMode == "DLL名称") {
 					const patterns = getDllModePatterns();
@@ -3442,9 +3652,9 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 					return false;
 				}
 
-				// 验证文件是否存在
+				// 验证文件是否存在（is_dir_empty 返回 data=true 表示目录为空，命令报错=目录不存在）
 				const isDirEmpty = await cmdInvoke("is_dir_empty", { path: `${outPath}/${generateDir}` });
-				if (isDirEmpty.code !== 0) {
+				if (isDirEmpty.code !== 0 || isDirEmpty.data === true) {
 					printInfoLog(`输出路径为空：${`${outPath}/${generateDir}`}.`, "log-warning");
 				}
 			}
@@ -3460,16 +3670,22 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 				printInfoLog(`  打包(压缩)文件（${compressFileArr.length}个）：${compressFileArr.join("、")}`);
 				if (compressFileArr.includes("Plugins.zip")) {
 					printInfoLog(`  正在打包[Plugins.zip]...`);
-					const pluginsPath = `${removeSlash(appConfig.clientPath)}/Plugins`;
-					const pluginsZipResult = await cmdInvoke("zip_dir", {
-						srcDir: pluginsPath,
-						dstFile: `${outPath}/Plugins.zip`,
-					});
-					if (pluginsZipResult.code !== 0) {
-						printInfoLog(`压缩[Plugins.zip]失败：${pluginsZipResult.data}.`, "log-error");
-						return false;
+					// 新版结构：Plugins 由 3 个来源收集产出，压缩源取输出目录（不再压客户端生成路径下的 Plugins）
+					const pluginsPath = `${removeSlash(outPath)}/Plugins`;
+					const pluginsPathExists = await cmdInvoke("exists", { path: pluginsPath });
+					if (pluginsPathExists.code !== 0) {
+						printInfoLog(`  Plugins 目录不存在（未勾选生成目录 Plugins？），跳过打包[Plugins.zip].`, "log-warning");
+					} else {
+						const pluginsZipResult = await cmdInvoke("zip_dir", {
+							srcDir: pluginsPath,
+							dstFile: `${outPath}/Plugins.zip`,
+						});
+						if (pluginsZipResult.code !== 0) {
+							printInfoLog(`压缩[Plugins.zip]失败：${pluginsZipResult.data}.`, "log-error");
+							return false;
+						}
+						printInfoLog(`  [Plugins.zip] 打包完成.`);
 					}
-					printInfoLog(`  [Plugins.zip] 打包完成.`);
 				}
 
 				if (compressFileArr.includes("Lib.zip")) {
@@ -3611,11 +3827,16 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 
 		try {
 			let dllModeDateRange = getDllModeDateRange();
-			// 1.[生成目录]
+			// [生成目录]：决定产出哪些目录
 			let generateDirArr = JSON.parse(appConfig.generateDirJson);
 			printInfoLog(`  生成目录（${generateDirArr.length}个）：${generateDirArr.join("、")}`);
+			// 1.[SIE 程序集]：3 个来源统一收集（旧版 SIE.Wpf.* → UI、其余 SIE.* → Domain；Domain/UI 不是必需目录，缺失不报错）
+			if (!(await collectWpfSieAssemblies(appConfig, generateDirArr, outPath))) return false;
+
+			// 2.[其余生成目录]：UI / Domain / Plugins 已由 SIE 收集产出，不再逐目录拷贝
 			for (let i = 0; i < generateDirArr.length; i++) {
 				const generateDir = generateDirArr[i];
+				if (generateDir == "UI" || generateDir == "Domain" || generateDir == "Plugins") continue;
 				const dirPath = `${removeSlash(appConfig.clientPath)}/${generateDir}`;
 				const dirPathExists = await cmdInvoke("exists", { path: dirPath });
 				if (dirPathExists.code !== 0) {
@@ -3638,11 +3859,20 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 					if (!tfsDllFiles || tfsDllFiles.length < 1) return false;
 					printInfoLog(`  [${generateDir}]：变更文件清单共 ${tfsDllFiles.length} 个，开始逐个复制.`);
 					const dirProgressIndex = printInfoLog(`  [${generateDir}] 复制文件：`);
+					// copy_path 对不存在的源文件会静默忽略并返回成功，这里先按生成目录的实际文件清单过滤，如实统计复制/跳过数
+					const dirFileSet = new Set(await readDirFiles(dirPath));
+					let copiedCount = 0;
+					let skippedCount = 0;
 
 					for (let j = 0; j < tfsDllFiles.length; j++) {
 						if (checkStop()) return false;
 						const tfsDllFile = tfsDllFiles[j];
 						const clientPath = removeSlash(dirPath);
+						if (!dirFileSet.has(tfsDllFile)) {
+							skippedCount++;
+							updateLogProgress(dirProgressIndex, "", j + 1, tfsDllFiles.length);
+							continue;
+						}
 						copyResult = await cmdInvoke("copy_path", {
 							source: `${clientPath}/${tfsDllFile}`,
 							destination: `${toGenerateDir}/${tfsDllFile}`,
@@ -3652,7 +3882,17 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 							printInfoLog(`  复制失败：${tfsDllFile}`, "log-error");
 							break;
 						}
+						copiedCount++;
 						updateLogProgress(dirProgressIndex, "", j + 1, tfsDllFiles.length);
+					}
+					printInfoLog(
+						`  [${generateDir}] 复制完成：实际复制 ${copiedCount} 个，源不存在跳过 ${skippedCount} 个（清单共 ${tfsDllFiles.length} 个）.`
+					);
+					if (copiedCount < 1) {
+						printInfoLog(
+							`  [${generateDir}] 变更清单中没有任何文件存在于该生成目录，可能尚未编译，或变更均不属于客户端模块.`,
+							"log-warning"
+						);
 					}
 				} else if (appconfigData.dllMode == "DLL名称") {
 					const patterns = getDllModePatterns();
@@ -3691,8 +3931,9 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 					return false;
 				}
 
+				// 验证文件是否存在（is_dir_empty 返回 data=true 表示目录为空，命令报错=目录不存在）
 				const isDirEmpty = await cmdInvoke("is_dir_empty", { path: `${outPath}/${generateDir}` });
-				if (isDirEmpty.code !== 0) {
+				if (isDirEmpty.code !== 0 || isDirEmpty.data === true) {
 					printInfoLog(`输出路径为空：${`${outPath}/${generateDir}`}.`, "log-warning");
 				}
 			}
@@ -3707,17 +3948,30 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 				printInfoLog(`  打包(压缩)文件（${compressFileArr.length}个）：${compressFileArr.join("、")}`);
 				if (compressFileArr.includes("Plugins.zip")) {
 					printInfoLog(`  正在打包[Plugins.zip]...（Domain + UI）`);
-					const domainPath = `${removeSlash(appConfig.clientPath)}/Domain`;
-					const uiPath = `${removeSlash(appConfig.clientPath)}/UI`;
-					const compressePluginsResult = await cmdInvoke("compress_zip", {
-						filePaths: [domainPath, uiPath],
-						dstFile: `${outPath}/Plugins.zip`,
-					});
-					if (compressePluginsResult.code !== 0) {
-						printInfoLog(`压缩[Plugins.zip]失败：${compressePluginsResult.data}.`, "log-error");
-						return false;
+					// 旧版结构：Plugins.zip = 输出目录下 Domain + UI 合并压缩（收集产物，不再压客户端生成路径）
+					// Domain / UI 不是必需目录，缺失的跳过，两者都没有则不打包
+					const pluginsSrcDirs: string[] = [];
+					for (const srcDir of [`${removeSlash(outPath)}/Domain`, `${removeSlash(outPath)}/UI`]) {
+						const srcDirExists = await cmdInvoke("exists", { path: srcDir });
+						if (srcDirExists.code === 0) {
+							pluginsSrcDirs.push(srcDir);
+						} else {
+							printInfoLog(`  目录不存在，跳过：${srcDir}`, "log-warning");
+						}
 					}
-					printInfoLog(`  [Plugins.zip] 打包完成.`);
+					if (pluginsSrcDirs.length < 1) {
+						printInfoLog(`  Domain、UI 目录均不存在，跳过打包[Plugins.zip].`, "log-warning");
+					} else {
+						const compressePluginsResult = await cmdInvoke("compress_zip", {
+							filePaths: pluginsSrcDirs,
+							dstFile: `${outPath}/Plugins.zip`,
+						});
+						if (compressePluginsResult.code !== 0) {
+							printInfoLog(`压缩[Plugins.zip]失败：${compressePluginsResult.data}.`, "log-error");
+							return false;
+						}
+						printInfoLog(`  [Plugins.zip] 打包完成.`);
+					}
 				}
 
 				if (compressFileArr.includes("AddIns.zip")) {
@@ -3883,6 +4137,48 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 		return true;
 	};
 
+	// 变更清单分类统计（仅 TFS / Git 模式有清单；顺便完成首次查询，后续模块复用缓存）
+	const logChangeListSummary = async () => {
+		const appconfigData = ctx.appconfigData();
+		if (appconfigData.dllMode !== "TFS" && appconfigData.dllMode !== "Git") {
+			printInfoLog(`  获取方式[${appconfigData.dllMode}]无变更清单，跳过清单统计.`);
+			return;
+		}
+		if (!appconfigData.dllModeValue) {
+			printInfoLog(`  未配置${appconfigData.dllMode}获取程序集的相关信息，跳过清单统计.`, "log-warning");
+			return;
+		}
+		const changedFiles =
+			appconfigData.dllMode === "TFS"
+				? await getTfsDllFiles(JSON.parse(appconfigData.dllModeValue) as SelectTfsType)
+				: await getGitDllFiles(JSON.parse(appconfigData.dllModeValue) as SelectGitType);
+		if (!changedFiles) {
+			printInfoLog(`  变更清单获取失败，跳过清单统计（后续模块仍会各自校验）.`, "log-warning");
+			return;
+		}
+		// 按文件名前缀分类：SIE.Web.* → Web 程序集，SIE.Wpf.* → WPF 程序集，其余 SIE.* → 服务程序集，非 SIE.* → 其他
+		let webCount = 0;
+		let wpfCount = 0;
+		let sieCount = 0;
+		let otherCount = 0;
+		for (const changedFile of changedFiles) {
+			const lower = String(changedFile).toLowerCase();
+			if (lower.startsWith("sie.web.")) {
+				webCount++;
+			} else if (lower.startsWith("sie.wpf.")) {
+				wpfCount++;
+			} else if (lower.startsWith("sie.")) {
+				sieCount++;
+			} else {
+				otherCount++;
+			}
+		}
+		printInfoLog(
+			`  变更清单统计（共 ${changedFiles.length} 个）：SIE.Web.*.dll ${webCount} 个，SIE.Wpf.*.dll ${wpfCount} 个，SIE.*.dll（不含 Web、Wpf）${sieCount} 个，其他 ${otherCount} 个.`,
+			"log-primary"
+		);
+	};
+
 	// 获取应用程序集（入口）
 	const getApplicationAssemblys = async (isOpenDir: boolean = false) => {
 		resetStopState();
@@ -3903,6 +4199,8 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 		].filter(Boolean);
 		printInfoLog(`开始获取程序集，获取方式：${appconfigData.dllMode}，获取范围：${getFetchRangeText()}，输出路径：${projectOutPath}`);
 		printInfoLog(`参与模块（${includedModules.length}个）：${includedModules.join("、")}`);
+		// 开头先统计变更清单（TFS / Git 模式），后续各模块复用同一份查询结果
+		if (includedModules.length > 0) await logChangeListSummary();
 		// 逐模块获取；任一模块后请求停止则立即中止，不再执行后续模块与结束日志
 		// 获取[WebApiHost]应用程序集
 		if (appconfigData.configItems.webApiHost.clientPath) {

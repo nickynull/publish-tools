@@ -3,7 +3,7 @@ use winreg::enums::*;
 use winreg::RegKey;
 
 /// 开机自启注册表值名称（HKCU\Software\Microsoft\Windows\CurrentVersion\Run 下）
-const RUN_KEY_NAME: &str = "SmomPublish";
+const RUN_KEY_NAME: &str = "SmomPublishStep";
 /// 自启命令行参数：用于区分"开机自启"与"手动启动"，实现静默驻留托盘
 const AUTOSTART_ARG: &str = "--autostart";
 

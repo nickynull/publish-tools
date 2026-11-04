@@ -34,7 +34,7 @@ import { storeToRefs } from "pinia";
 import { useTagsViewRoutes } from "@/stores/tagsViewRoutes";
 import { check, Update } from "@tauri-apps/plugin-updater";
 import { listen } from "@tauri-apps/api/event";
-import { relaunch } from "@tauri-apps/plugin-process";
+import { cmdInvoke } from "@/utils/command";
 import { useThemeConfig } from "@/stores/themeConfig";
 import other from "@/utils/other";
 import { Local, Session } from "@/utils/storage";
@@ -122,7 +122,7 @@ const onDownloadFinished = () => {
     duration: 5 * 1000,
     message: "更新成功，正在重启！",
     onClose: async () => {
-      await relaunch();
+      await cmdInvoke("restart_app");
     },
   });
 };

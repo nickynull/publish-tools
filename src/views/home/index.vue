@@ -3342,11 +3342,11 @@ const newCopyWpfAssemblyFile = async (
         return false;
       }
 
-      // 验证文件是否存在
+      // 验证文件是否存在（is_dir_empty 返回 data=true 表示目录为空，命令报错=目录不存在）
       const isDirEmpty = await cmdInvoke("is_dir_empty", {
         path: `${outPath}/${generateDir}`,
       });
-      if (isDirEmpty.code !== 0) {
+      if (isDirEmpty.code !== 0 || isDirEmpty.data === true) {
         printInfoLog(`输出路径为空：${`${outPath}/${generateDir}`}.`, "log-warning");
       }
     }
@@ -3702,11 +3702,11 @@ const copyWpfAssemblyFile = async (
         return false;
       }
 
-      // 验证文件是否存在
+      // 验证文件是否存在（is_dir_empty 返回 data=true 表示目录为空，命令报错=目录不存在）
       const isDirEmpty = await cmdInvoke("is_dir_empty", {
         path: `${outPath}/${generateDir}`,
       });
-      if (isDirEmpty.code !== 0) {
+      if (isDirEmpty.code !== 0 || isDirEmpty.data === true) {
         printInfoLog(`输出路径为空：${`${outPath}/${generateDir}`}.`, "log-warning");
       }
     }
@@ -4012,11 +4012,11 @@ const copyAssemblyFile = async (
     printInfoLog(`获取程序集 ${appTypeName} 出错：${JSON.stringify(error)}`, "log-error");
     return false;
   }
-  // 验证是否为空文件夹
+  // 验证是否为空文件夹（is_dir_empty 返回 data=true 表示目录为空，命令报错=目录不存在）
   const dirEmptyResult = await cmdInvoke("is_dir_empty", {
     path: outPath,
   });
-  if (dirEmptyResult.code !== 0) {
+  if (dirEmptyResult.code !== 0 || dirEmptyResult.data === true) {
     printInfoLog(`输出路径为空：${outPath}.`, "log-warning");
   } else {
     printInfoLog(`获取程序集 ${appTypeName} 成功.`, "log-success");

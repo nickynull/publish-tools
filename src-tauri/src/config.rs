@@ -97,6 +97,34 @@ pub struct AppConfig {
     pub mcp: McpConfig,
     #[serde(default)]
     pub window: WindowConfig,
+    /// 项目发布(STEP) 本机记忆（原 localStorage 迁移）：编译配置、项目/环境选择、日志偏好等
+    /// 键值对。值统一按字符串存（与原 localStorage 语义一致），编译配置为 JSON 字符串。
+    #[serde(default)]
+    pub step: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+/// 读取 STEP 本机配置键值段
+pub fn get_step_config(
+    app_handle: &tauri::AppHandle,
+) -> std::collections::BTreeMap<String, serde_json::Value> {
+    load(app_handle).step
+}
+
+/// 合并写入 STEP 本机配置（value 为 null 表示删除该键），返回更新后的键值段
+pub fn update_step_config(
+    app_handle: &tauri::AppHandle,
+    entries: std::collections::BTreeMap<String, serde_json::Value>,
+) -> Result<std::collections::BTreeMap<String, serde_json::Value>, String> {
+    let mut config = load(app_handle);
+    for (key, value) in entries {
+        if value.is_null() {
+            config.step.remove(&key);
+        } else {
+            config.step.insert(key, value);
+        }
+    }
+    save(app_handle, &config)?;
+    Ok(config.step)
 }
 
 /// 获取 config.json 文件路径

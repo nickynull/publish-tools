@@ -330,3 +330,21 @@
 		overflow: auto;
 	}
 }
+
+/* MessageBox 确认框
+------------------------------- */
+// 根治确认框文字溢出：message 内容常含长路径/URL 等无空格长串，默认按单词断行
+// 会导致文本冲出弹窗；统一允许任意字符断行、保留 \n 换行，并限制弹窗不超视口
+.el-message-box {
+	max-width: 50rem;
+	.el-message-box__message {
+		word-break: break-all;
+		overflow-wrap: anywhere;
+		white-space: pre-wrap;
+	}
+	// 长内容时内容区自身滚动，按钮栏始终可见
+	.el-message-box__content {
+		max-height: 60vh;
+		overflow-y: auto;
+	}
+}

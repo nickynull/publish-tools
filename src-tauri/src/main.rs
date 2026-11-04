@@ -9,6 +9,7 @@ use SmomPublish::cmd_module::cancel;
 use SmomPublish::cmd_module::discovery_module;
 use SmomPublish::cmd_module::file_module;
 use SmomPublish::cmd_module::parse_sln_module;
+use SmomPublish::cmd_module::upload_module;
 use SmomPublish::cmd_module::wpf_upgrade_module;
 
 // 了解更多关于 Tauri 命令的信息，请访问：https://tauri.app/v1/guides/features/command
@@ -202,6 +203,8 @@ fn main() {
             file_module::invalidate_ssh_session,
             cancel::set_publish_cancel,
             cancel::set_file_op_cancel,
+            upload_module::sync_dir_to_server,
+            upload_module::cancel_sync_upload,
             discovery_module::discover_local_services,
             discovery_module::discover_remote_windows_services,
             discovery_module::discover_remote_docker_containers,

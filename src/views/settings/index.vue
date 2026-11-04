@@ -114,6 +114,10 @@
                     </el-form-item>
                     <el-form-item :label="$t('message.settings.mcpStatus')">
                         <el-tag :type="mcpStatusTagType">{{ $t(mcpStatusI18nKey) }}</el-tag>
+                        <el-button style="margin-left: 12px" @click="openMcpConfigDialog">
+                            <el-icon class="mr5"><ele-CopyDocument /></el-icon>
+                            {{ $t('message.settings.mcpConfigCopy') }}
+                        </el-button>
                     </el-form-item>
 
                     <!-- SSH MCP 配置同步 -->
@@ -197,6 +201,9 @@
                 $t('message.settings.save')
                 }}</el-button>
         </div>
+
+        <!-- MCP 服务器配置（供接入 agent 复制） -->
+        <mcp-config-dialog ref="mcpConfigDialogRef" />
     </div>
 </template>
 
@@ -210,6 +217,7 @@ import { defaultSettings, parsePublishModuleOrder, DEFAULT_PUBLISH_MODULE_ORDER 
 import { cmdInvoke } from "@/utils/command";
 import mittBus from "@/utils/mitt";
 import { listen } from "@tauri-apps/api/event";
+import McpConfigDialog from "./components/mcpConfigDialog.vue";
 
 const settingsDb = useSettingsDb();
 const formRef = ref<FormInstance>();
@@ -248,8 +256,7 @@ let mcpStatusTimer: number | null = null;
 // 轮询代次令牌：stopMcpStatusPolling()/新轮询会递增，作废飞行中的旧轮询请求
 let mcpPollToken = 0;
 
-// ==================== 未保存状态跟踪 ====================
-// 保存按钮仅在配置有改动后可用，并在旁边提示「当前配置未保存」，避免改完忘记保存。
+// ==================== 未保存状态跟踪 =============// 保存按钮仅在配置有改动后可用，并在旁边提示「当前配置未保存」，避免改完忘记保存。
 // 表单与 MCP 配置分开记录快照：MCP 开关是即时保存的，不应把未保存的表单改动一并标记为已保存
 const buildFormSnapshot = () =>
     JSON.stringify({
@@ -277,6 +284,12 @@ const savedMcpSnapshot = ref(buildMcpSnapshot());
 const isDirty = computed(
     () => savedFormSnapshot.value !== buildFormSnapshot() || savedMcpSnapshot.value !== buildMcpSnapshot()
 );
+// MCP 服务器配置弹窗（展示接入 agent 的 JSON 配置）
+const mcpConfigDialogRef = ref();
+
+const openMcpConfigDialog = () => {
+  mcpConfigDialogRef.value?.open(mcpConfig.mcp_port);
+};
 
 let unlisten: (() => void) | null = null;
 

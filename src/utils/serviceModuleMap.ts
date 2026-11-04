@@ -33,32 +33,6 @@ export const emptyModule = () => ({
 });
 
 /**
- * 完整的空白 config_items 骨架
- * 字段与取值对齐 appconfigDialog.vue 的初始 ruleForm.configItems：
- * 应用配置弹窗打开时会直接读取 wpfClient.generateDirJson 等字段，
- * 缺字段会导致「修改」弹窗报错，因此新建配置必须写入完整骨架。
- */
-export const createEmptyConfigItems = (): Record<string, any> => ({
-  webApiHost: emptyModule(),
-  webClient: emptyModule(),
-  wpfClient: {
-    ...emptyModule(),
-    serverId: null,
-    serverName: null,
-    isCompress: 1,
-    generateDirJson: "",
-    compressFileJson: "",
-  },
-  scheduleServer: emptyModule(),
-  spcMonitor: emptyModule(),
-  isRebuild: 1,
-  isBackup: 0,
-  isNewVersion: false,
-  isPullLatest: 1,
-  isPreflight: 1,
-});
-
-/**
  * 把发现的服务合并进一份 configItems:模块勾选目标服务器 + 该服务器下追加服务条目(服务标识+发布路径)
  * 返回实际新增的服务条数;同名服务标识已存在时跳过,不覆盖
  */

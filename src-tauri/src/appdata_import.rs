@@ -86,13 +86,14 @@ pub struct AppDataBackupInfo {
 /// （数据在 `~/.local/share`、配置在 `~/.config`），两处都要探测。
 fn legacy_dirs(app: &tauri::AppHandle) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = Vec::new();
-    for base in [app.path().data_dir(), app.path().config_dir()] {
-        if let Ok(base) = base {
-            for identifier in LEGACY_IDENTIFIERS {
-                let candidate = base.join(identifier);
-                if !dirs.contains(&candidate) {
-                    dirs.push(candidate);
-                }
+    for base in [app.path().data_dir(), app.path().config_dir()]
+        .into_iter()
+        .flatten()
+    {
+        for identifier in LEGACY_IDENTIFIERS {
+            let candidate = base.join(identifier);
+            if !dirs.contains(&candidate) {
+                dirs.push(candidate);
             }
         }
     }
@@ -114,11 +115,12 @@ fn legacy_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 /// 当前数据目录候选（Windows/macOS 去重后只剩一个）
 fn current_dirs(app: &tauri::AppHandle) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = Vec::new();
-    for dir in [app.path().app_data_dir(), app.path().app_config_dir()] {
-        if let Ok(dir) = dir {
-            if !dirs.contains(&dir) {
-                dirs.push(dir);
-            }
+    for dir in [app.path().app_data_dir(), app.path().app_config_dir()]
+        .into_iter()
+        .flatten()
+    {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
         }
     }
     dirs
@@ -212,7 +214,7 @@ pub fn detect_legacy_app_data(app: tauri::AppHandle) -> Result<LegacyDataInfo, S
     if found {
         total_size = collect_files(&legacy, &legacy, &mut files).unwrap_or(0);
     }
-    files.sort_by(|a, b| b.size.cmp(&a.size));
+    files.sort_by_key(|a| std::cmp::Reverse(a.size));
     Ok(LegacyDataInfo {
         found: found && !files.is_empty(),
         legacy_dir: legacy.to_string_lossy().to_string(),

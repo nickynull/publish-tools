@@ -1,15 +1,16 @@
 import { ref, nextTick } from "vue";
 import { formatDate } from "@/utils/formatTime";
+import { getStepConfigValue, setStepConfigValue } from "@/utils/stepLocalConfig";
 
-// 日志行数上限默认配置：存 localStorage（本机记忆，无需入库）
+// 日志行数上限默认配置：存 config.json 的 step 段（原 localStorage，本机记忆无需入库）
 const STEP_LOG_MAX_LINES_KEY = "stepLogMaxLines";
 const STEP_LOG_MAX_LINES_DEFAULT = 1000;
 const STEP_LOG_MAX_LINES_MIN = 10;
 const STEP_LOG_MAX_LINES_MAX = 100000;
 
-/** 可选配置：不同使用方可用独立的 localStorage 键与默认上限（不传时保持现状） */
+/** 可选配置：不同使用方可用独立的配置键与默认上限（不传时保持现状） */
 export type StepLogOptions = {
-	/** 行数上限的 localStorage 键（默认 stepLogMaxLines） */
+	/** 行数上限的配置键（默认 stepLogMaxLines） */
 	maxLinesStorageKey?: string;
 	/** 默认行数上限（默认 1000） */
 	defaultMaxLines?: number;
@@ -29,18 +30,13 @@ export function useStepLog(options?: StepLogOptions) {
 	// 自增日志 id：printInfoLog 返回，供进度更新按 id 定位
 	let nextLogId = 1;
 
-	// 行数上限：初始化时读 localStorage，非法/缺失回退默认
-	const maxLogLines = ref<number>(loadMaxLines());
+	// 行数上限：默认值先占位，config.json 读取后异步回填（非法值回退默认）
+	const maxLogLines = ref<number>(defaultMaxLines);
 
-	function loadMaxLines(): number {
-		try {
-			const raw = localStorage.getItem(maxLinesKey);
-			if (!raw) return defaultMaxLines;
-			return clampMaxLines(Number(raw));
-		} catch {
-			return defaultMaxLines;
-		}
-	}
+	getStepConfigValue<string>(maxLinesKey, String(defaultMaxLines)).then((raw) => {
+		maxLogLines.value = clampMaxLines(Number(raw));
+		trimLogs();
+	});
 
 	function clampMaxLines(n: number): number {
 		if (!Number.isFinite(n)) return defaultMaxLines;
@@ -55,15 +51,13 @@ export function useStepLog(options?: StepLogOptions) {
 		}
 	};
 
-	// 设置行数上限：校验并夹取范围后写 ref + localStorage，并立即裁剪一次
+	// 设置行数上限：校验并夹取范围后写 ref + config.json，并立即裁剪一次
 	const setMaxLogLines = (n: number) => {
 		const value = clampMaxLines(Number(n));
 		maxLogLines.value = value;
-		try {
-			localStorage.setItem(maxLinesKey, String(value));
-		} catch {
-			// localStorage 不可用时仅本次会话生效
-		}
+		setStepConfigValue(maxLinesKey, String(value)).catch((error) => {
+			console.error("保存日志行数上限失败:", error);
+		});
 		trimLogs();
 	};
 
@@ -132,13 +126,13 @@ export function useStepLog(options?: StepLogOptions) {
 	/**
 	 * 打印日志信息
 	 * @param content 日志内容
-	 * @param type：log-info、log-warning、log-error、log-success
+	 * @param type：log-info、log-warning、log-error、log-success、log-primary
 	 * @param showDate 是否显示日期
 	 * @returns 日志行 id（供 updateLogProgress / setLogProgressText 定位）
 	 */
 	const printInfoLog = (
 		content: string,
-		type: "log-info" | "log-warning" | "log-error" | "log-success" = "log-info",
+		type: "log-info" | "log-warning" | "log-error" | "log-success" | "log-primary" = "log-info",
 		showDate: boolean = true
 	): number => {
 		let nowDate = "";

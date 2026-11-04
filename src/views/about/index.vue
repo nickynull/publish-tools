@@ -29,7 +29,7 @@ import { ElMessage } from "element-plus";
 import { Platform } from "@element-plus/icons-vue";
 import { useI18n } from "vue-i18n";
 import { check, Update } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
+import { cmdInvoke } from "@/utils/command";
 import { getVersion } from "@tauri-apps/api/app";
 import { fetchGithubReleaseNotes } from "@/utils/githubRelease";
 
@@ -91,7 +91,7 @@ const onDownloadFinished = () => {
     duration: 5 * 1000,
     message: "更新成功，正在重启！",
     onClose: async () => {
-      await relaunch();
+      await cmdInvoke("restart_app");
     },
   });
 };

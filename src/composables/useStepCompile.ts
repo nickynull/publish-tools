@@ -2,6 +2,7 @@ import { computed, ref, watch } from "vue";
 import { cmdInvoke } from "@/utils/command";
 import { removeSlash } from "@/utils/other";
 import { isPullLatestEnabled, pullLatestCode } from "@/utils/sourceControl";
+import { getStepConfigValue, setStepConfigValue } from "@/utils/stepLocalConfig";
 import type { StepLogApi } from "./useStepLog";
 
 /**
@@ -12,8 +13,8 @@ import type { StepLogApi } from "./useStepLog";
  *
  * 独立性约定：
  * - 解决方案路径来自应用配置（t_app_config.solution_path），发布信息卡调整后实时落库，
- *   不存 localStorage；生成模式 / 平台 / 方式等编译参数存本机
- *   （localStorage，按「项目 + 环境」记忆）；
+ *   不存本机配置；生成模式 / 平台 / 方式等编译参数存本机
+ *   （config.json 的 step 段，按「项目 + 环境」记忆）；
  * - 编译前是否先获取一遍最新代码由发布信息卡「拉取最新代码」开关控制
  *   （存应用配置 configItems.isPullLatest）；
  * - 不调用 useStepPublish 内部逻辑（仅通过注入的 checkStop 读取停止标记），
@@ -55,16 +56,16 @@ const createDefaultConfig = (appconfigData?: RowAppconfigType | null): StepCompi
 });
 
 // 读取当前「项目 + 环境」的编译配置（本机未保存过则用应用配置默认值）
-export const loadStepCompileConfig = (
+export const loadStepCompileConfig = async (
 	appconfigData: RowAppconfigType | null | undefined,
 	projectId: any,
 	environment: any
-): StepCompileConfig => {
+): Promise<StepCompileConfig> => {
 	const defaults = createDefaultConfig(appconfigData);
 	const storageKey = getCompileStorageKey(projectId, environment);
 	if (!storageKey) return defaults;
 	try {
-		const raw = localStorage.getItem(storageKey);
+		const raw = await getStepConfigValue<string>(storageKey, "");
 		if (!raw) return defaults;
 		const saved = JSON.parse(raw) as Partial<StepCompileConfig>;
 		return {
@@ -79,8 +80,8 @@ export const loadStepCompileConfig = (
 	}
 };
 
-// 保存当前「项目 + 环境」的编译配置（localStorage 不可用时仅本次会话生效）
-export const saveStepCompileConfig = (
+// 保存当前「项目 + 环境」的编译配置（config.json，写入失败仅本次会话生效）
+export const saveStepCompileConfig = async (
 	projectId: any,
 	environment: any,
 	config: StepCompileConfig
@@ -88,7 +89,7 @@ export const saveStepCompileConfig = (
 	const storageKey = getCompileStorageKey(projectId, environment);
 	if (!storageKey) return;
 	try {
-		localStorage.setItem(storageKey, JSON.stringify(config));
+		await setStepConfigValue(storageKey, JSON.stringify(config));
 	} catch (error) {
 		console.error("保存编译解决方案配置失败:", error);
 	}
@@ -113,9 +114,17 @@ export function useStepCompile(ctx: StepCompileContext, log: StepLogApi) {
 	// 存储键（项目/环境变化即切换配置）
 	const storageKey = computed(() => getCompileStorageKey(ctx.projectId(), ctx.environment()));
 
-	// 重新读取配置：切换项目/环境、应用配置换掉后都会走这里
-	const reloadConfig = () => {
-		config.value = loadStepCompileConfig(ctx.appconfigData(), ctx.projectId(), ctx.environment());
+	// 重新读取配置：切换项目/环境、应用配置换掉后都会走这里。
+	// 读取是异步的（config.json），用令牌防止快速切换时慢响应覆盖新选择
+	let reloadToken = 0;
+	const reloadConfig = async () => {
+		const token = ++reloadToken;
+		const loaded = await loadStepCompileConfig(
+			ctx.appconfigData(),
+			ctx.projectId(),
+			ctx.environment()
+		);
+		if (token === reloadToken) config.value = loaded;
 	};
 
 	// 应用配置 id 参与监听：首次加载时项目/环境先就绪、应用配置后到达，
@@ -125,10 +134,10 @@ export function useStepCompile(ctx: StepCompileContext, log: StepLogApi) {
 	);
 	watch(configSourceKey, reloadConfig, { immediate: true });
 
-	// 局部更新配置并立即落盘（页面与设置条统一走这里，保证内存与 localStorage 一致）
+	// 局部更新配置并立即落盘（页面与设置条统一走这里，保证内存与 config.json 一致）
 	const setConfig = (patch: Partial<StepCompileConfig>) => {
 		config.value = { ...config.value, ...patch };
-		saveStepCompileConfig(ctx.projectId(), ctx.environment(), config.value);
+		void saveStepCompileConfig(ctx.projectId(), ctx.environment(), config.value);
 	};
 
 	// 毫秒转可读时长

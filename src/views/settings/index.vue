@@ -114,6 +114,10 @@
                     </el-form-item>
                     <el-form-item :label="$t('message.settings.mcpStatus')">
                         <el-tag :type="mcpStatusTagType">{{ $t(mcpStatusI18nKey) }}</el-tag>
+                        <el-button style="margin-left: 12px" @click="openMcpConfigDialog">
+                            <el-icon class="mr5"><ele-CopyDocument /></el-icon>
+                            {{ $t('message.settings.mcpConfigCopy') }}
+                        </el-button>
                     </el-form-item>
 
                     <!-- SSH MCP 配置同步 -->
@@ -186,6 +190,73 @@
                     <el-button type="primary" :loading="detectRuleAdding" @click="onAddDetectRule">新增</el-button>
                 </div>
             </el-card>
+
+            <!-- 应用数据：从旧版应用身份（com.smompublish.tool）迁移数据；无旧版数据且无备份时整块不显示 -->
+            <el-card v-if="showAppDataCard" shadow="never" style="margin-top: 15px">
+                <template #header>
+                    <span>应用数据</span>
+                    <span class="settings-tip" style="margin-left: 8px">应用身份已调整为 com.smompublish.tool.step，数据目录随之变化；升级后可在此把旧版数据导入</span>
+                </template>
+                <el-form label-width="180px" size="default" v-loading="legacyLoading">
+                    <el-form-item label="当前数据目录">
+                        <span class="settings-tip" style="margin-left: 0; word-break: break-all">{{ legacyInfo?.currentDir || "-" }}</span>
+                    </el-form-item>
+                    <el-form-item label="旧版数据目录">
+                        <span class="settings-tip" style="margin-left: 0; word-break: break-all">{{ legacyInfo?.legacyDir || "-" }}</span>
+                        <el-tag v-if="legacyInfo" :type="legacyInfo.found ? 'success' : 'info'" size="small"
+                            style="margin-left: 12px">
+                            {{ legacyInfo.found ? '可用' : '不存在或为空' }}
+                        </el-tag>
+                    </el-form-item>
+                    <el-form-item label="旧版应用数据">
+                        <template v-if="legacyInfo">
+                            <template v-if="legacyInfo.found">                                <el-tag type="success">检测到 {{ legacyInfo.files.length }} 个文件 · {{
+                                    formatSize(legacyInfo.totalSize) }}</el-tag>
+                                <el-button type="primary" style="margin-left: 12px" :loading="legacyImporting"
+                                    @click="onImportLegacyData">
+                                    {{ legacyInfo.pending ? '重新导入' : '导入' }}
+                                </el-button>
+                            </template>
+                            <template v-else>
+                                <el-tag type="info">未检测到旧版数据</el-tag>
+                            </template>
+                            <el-button style="margin-left: 8px" @click="onDetectLegacyData">重新检测</el-button>
+                        </template>
+                    </el-form-item>
+                    <el-form-item v-if="legacyInfo && legacyInfo.found" label="可导入文件">
+                        <div class="legacy-file-list">
+                            <div v-for="f in legacyInfo.files" :key="f.name" class="legacy-file-row">
+                                <span class="legacy-file-name">{{ f.name }}</span>
+                                <span class="legacy-file-size">{{ formatSize(f.size) }}</span>
+                                <span class="legacy-file-time">{{ f.modified }}</span>
+                            </div>
+                        </div>
+                    </el-form-item>
+                    <el-form-item label="数据备份">
+                        <div v-if="appDataBackups.length" class="legacy-file-list" style="width: 100%">
+                            <div v-for="b in appDataBackups" :key="b.name" class="legacy-file-row">
+                                <span class="legacy-file-name">{{ b.createdAt }}</span>
+                                <span class="legacy-file-size" style="width: 170px">{{ b.files }} 个文件 · {{ formatSize(b.totalSize) }}</span>
+                                <span class="legacy-file-time">
+                                    <el-button link type="primary" :loading="restoringBackup === b.name"
+                                        @click="onRestoreBackup(b)">恢复</el-button>
+                                    <el-button link type="danger" :loading="deletingBackup === b.name"
+                                        @click="onDeleteBackup(b)">删除</el-button>
+                                </span>
+                            </div>
+                        </div>
+                        <template v-else>
+                            <el-tag type="info">暂无备份</el-tag>
+                            <span class="settings-tip">导入或恢复数据前会自动备份当前数据，可在此恢复或删除</span>
+                        </template>
+                    </el-form-item>
+                    <el-form-item v-if="legacyInfo?.pending" label="待生效数据">
+                        <el-tag type="warning">已暂存，重启应用后生效</el-tag>
+                        <el-button style="margin-left: 12px"
+                            @click="confirmAndRestart('重启应用后数据才会生效，是否立即重启？', '重启应用')">立即重启</el-button>
+                    </el-form-item>
+                </el-form>
+            </el-card>
         </div>
 
         <!-- 底部按钮栏：保存 / 取消保存 -->
@@ -197,6 +268,9 @@
                 $t('message.settings.save')
                 }}</el-button>
         </div>
+
+        <!-- MCP 服务器配置（供接入 agent 复制） -->
+        <mcp-config-dialog ref="mcpConfigDialogRef" />
     </div>
 </template>
 
@@ -210,6 +284,7 @@ import { defaultSettings, parsePublishModuleOrder, DEFAULT_PUBLISH_MODULE_ORDER 
 import { cmdInvoke } from "@/utils/command";
 import mittBus from "@/utils/mitt";
 import { listen } from "@tauri-apps/api/event";
+import McpConfigDialog from "./components/mcpConfigDialog.vue";
 
 const settingsDb = useSettingsDb();
 const formRef = ref<FormInstance>();
@@ -248,8 +323,7 @@ let mcpStatusTimer: number | null = null;
 // 轮询代次令牌：stopMcpStatusPolling()/新轮询会递增，作废飞行中的旧轮询请求
 let mcpPollToken = 0;
 
-// ==================== 未保存状态跟踪 ====================
-// 保存按钮仅在配置有改动后可用，并在旁边提示「当前配置未保存」，避免改完忘记保存。
+// ==================== 未保存状态跟踪 =============// 保存按钮仅在配置有改动后可用，并在旁边提示「当前配置未保存」，避免改完忘记保存。
 // 表单与 MCP 配置分开记录快照：MCP 开关是即时保存的，不应把未保存的表单改动一并标记为已保存
 const buildFormSnapshot = () =>
     JSON.stringify({
@@ -277,6 +351,12 @@ const savedMcpSnapshot = ref(buildMcpSnapshot());
 const isDirty = computed(
     () => savedFormSnapshot.value !== buildFormSnapshot() || savedMcpSnapshot.value !== buildMcpSnapshot()
 );
+// MCP 服务器配置弹窗（展示接入 agent 的 JSON 配置）
+const mcpConfigDialogRef = ref();
+
+const openMcpConfigDialog = () => {
+  mcpConfigDialogRef.value?.open(mcpConfig.mcp_port);
+};
 
 let unlisten: (() => void) | null = null;
 
@@ -454,11 +534,163 @@ const onDeleteDetectRule = async (row: FolderDetectRule) => {
     }
 };
 
+// ==================== 应用数据导入（旧应用身份数据迁移） ====================
+// 应用身份由 com.smompublish.tool 改为 com.smompublish.tool.step，数据目录随之变化。
+// 导入不立即覆盖数据库（运行期文件被 SQLite 占用），Rust 端先暂存到当前目录 pending_import/，
+// 下次启动时（数据库打开之前）覆盖生效，原数据自动备份到 pre_import_backup_<时间戳>/
+type LegacyFileInfo = { name: string; size: number; modified: string };
+type LegacyDataInfo = {
+    found: boolean;
+    legacyDir: string;
+    currentDir: string;
+    files: LegacyFileInfo[];
+    totalSize: number;
+    pending: boolean;
+};
+const legacyInfo = ref<LegacyDataInfo | null>(null);
+const legacyLoading = ref(false);
+const legacyImporting = ref(false);
+// 数据备份（导入 / 恢复前自动生成于当前数据目录）
+type AppDataBackupInfo = { name: string; path: string; files: number; totalSize: number; createdAt: string };
+const appDataBackups = ref<AppDataBackupInfo[]>([]);
+const restoringBackup = ref("");
+const deletingBackup = ref("");
+// 「应用数据」卡片：仅在检测到旧版数据 / 有待生效导入 / 存在数据备份时显示，避免对全新用户露出无用模块
+const showAppDataCard = computed(() => {
+    const info = legacyInfo.value;
+    return !!((info && (info.found || info.pending)) || appDataBackups.value.length);
+});
+
+/// 询问并执行重启：取消（选「稍后」）只提示已暂存，真正失败要显式报错
+const confirmAndRestart = async (content: string, title: string) => {
+    try {
+        await ElMessageBox.confirm(content, title, {
+            confirmButtonText: "立即重启",
+            cancelButtonText: "稍后",
+            type: "success",
+        });
+    } catch {
+        ElMessage.success("已暂存，下次启动应用时生效");
+        return;
+    }
+    try {
+        const rr = await cmdInvoke("restart_app");
+        if (rr.code !== 0) {
+            ElMessage.error(rr.msg || "重启失败，请手动退出应用后重新打开");
+        }
+    } catch {
+        // 重启时进程会退出，invoke 通道随之中断，属正常现象
+    }
+};
+
+const formatSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+};
+
+const onDetectLegacyData = async () => {
+    legacyLoading.value = true;
+    try {
+        const r = await cmdInvoke<LegacyDataInfo>("detect_legacy_app_data");
+        legacyInfo.value = r.code === 0 && r.data ? r.data : null;
+    } finally {
+        legacyLoading.value = false;
+    }
+};
+
+const loadAppDataBackups = async () => {
+    const r = await cmdInvoke<AppDataBackupInfo[]>("list_appdata_backups");
+    appDataBackups.value = r.code === 0 && Array.isArray(r.data) ? r.data : [];
+};
+
+const onImportLegacyData = async () => {
+    const info = legacyInfo.value;
+    if (!info?.found) return;
+    try {
+        await ElMessageBox.confirm(
+            `将把旧版本（${info.legacyDir}）的 ${info.files.length} 个文件（${formatSize(info.totalSize)}）导入到当前程序，` +
+            `覆盖当前数据库与配置；当前数据会先自动备份，旧目录不会被删除。导入后需重启应用生效，是否继续？`,
+            "导入应用数据",
+            { confirmButtonText: "导入", cancelButtonText: "取消", type: "warning" }
+        );
+    } catch {
+        return;
+    }
+    legacyImporting.value = true;
+    try {
+        const r = await cmdInvoke<{ files: number; bytes: number }>("import_legacy_app_data");
+        if (r.code !== 0) {
+            ElMessage.error(r.data ? String(r.data) : r.msg || "导入失败");
+            return;
+        }
+        await onDetectLegacyData();
+        await loadAppDataBackups();
+        await confirmAndRestart("导入已准备完成，重启应用后生效。是否立即重启？", "导入完成");
+    } finally {
+        legacyImporting.value = false;
+    }
+};
+
+// 恢复备份：把备份内容复制进暂存区，重启后生效（生效前当前数据会再自动备份一份）
+const onRestoreBackup = async (b: AppDataBackupInfo) => {
+    try {
+        await ElMessageBox.confirm(
+            `将把 ${b.createdAt} 的备份（${b.files} 个文件，${formatSize(b.totalSize)}）恢复为当前数据，` +
+            `覆盖当前数据库与配置；当前数据会先自动备份为新的 pre_import_backup_ 目录，恢复后需重启应用生效。是否继续？`,
+            "恢复数据备份",
+            { confirmButtonText: "恢复", cancelButtonText: "取消", type: "warning" }
+        );
+    } catch {
+        return;
+    }
+    restoringBackup.value = b.name;
+    try {
+        const r = await cmdInvoke<{ files: number; bytes: number }>("restore_appdata_backup", { name: b.name });
+        if (r.code !== 0) {
+            ElMessage.error(r.msg || "恢复失败");
+            return;
+        }
+        await Promise.all([onDetectLegacyData(), loadAppDataBackups()]);
+        await confirmAndRestart("恢复已准备完成，重启应用后生效。是否立即重启？", "恢复完成");
+    } finally {
+        restoringBackup.value = "";
+    }
+};
+
+// 删除备份：不可撤销，需二次确认
+const onDeleteBackup = async (b: AppDataBackupInfo) => {
+    try {
+        await ElMessageBox.confirm(
+            `确定删除 ${b.createdAt} 的备份（${b.files} 个文件，${formatSize(b.totalSize)}）？删除后不可恢复。`,
+            "删除数据备份",
+            { confirmButtonText: "删除", cancelButtonText: "取消", type: "warning" }
+        );
+    } catch {
+        return;
+    }
+    deletingBackup.value = b.name;
+    try {
+        const r = await cmdInvoke("delete_appdata_backup", { name: b.name });
+        if (r.code !== 0) {
+            ElMessage.error(r.msg || "删除失败");
+            return;
+        }
+        ElMessage.success("已删除");
+        await loadAppDataBackups();
+    } finally {
+        deletingBackup.value = "";
+    }
+};
+
 // 监听 MCP 状态事件
 onMounted(async () => {
     load();
     loadPrefixes();
     loadDetectRules();
+    onDetectLegacyData();
+    loadAppDataBackups();
     try {
         unlisten = await listen<{ status: string; message?: string; port?: number }>("mcp-status", (event) => {
             mcpStatus.value = event.payload.status;
@@ -743,6 +975,36 @@ const load = async () => {
         display: flex;
         flex-direction: column;
         gap: 6px;
+    }
+
+    // 旧版应用数据文件清单
+    .legacy-file-list {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        width: 100%;
+        max-height: 180px;
+        overflow-y: auto;
+    }
+
+    .legacy-file-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 12px;
+
+        .legacy-file-name {
+            min-width: 220px;
+        }
+
+        .legacy-file-size {
+            width: 90px;
+            color: var(--el-text-color-secondary);
+        }
+
+        .legacy-file-time {
+            color: var(--el-text-color-secondary);
+        }
     }
 
     .order-item {

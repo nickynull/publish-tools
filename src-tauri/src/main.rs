@@ -4,11 +4,13 @@
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
+use SmomPublish::appdata_import;
 use SmomPublish::cmd_module::auto_start_module;
 use SmomPublish::cmd_module::cancel;
 use SmomPublish::cmd_module::discovery_module;
 use SmomPublish::cmd_module::file_module;
 use SmomPublish::cmd_module::parse_sln_module;
+use SmomPublish::cmd_module::upload_module;
 use SmomPublish::cmd_module::wpf_upgrade_module;
 
 // 了解更多关于 Tauri 命令的信息，请访问：https://tauri.app/v1/guides/features/command
@@ -78,10 +80,38 @@ fn update_window_config(
     Ok(cfg.window)
 }
 
+/// 重启应用（安装更新后、导入旧版数据后调用）
+///
+/// 不用 `@tauri-apps/plugin-process` 的 relaunch：Rust 侧并未引入该插件，
+/// 前端调用会因「插件不存在」直接失败（且旧代码把异常吞掉了，表现为点了没反应）。
+/// 直接走 Tauri 内置的 `AppHandle::restart` 即可，无需额外依赖与权限。
+/// 注意：重启会重新走一遍 `setup`，导入暂存区的数据因此在下次启动时生效。
+#[tauri::command]
+fn restart_app(app: tauri::AppHandle) {
+    app.restart();
+}
+
 /// 获取 MCP 运行状态（持久化，不依赖事件时序）
 #[tauri::command]
 fn get_mcp_status() -> String {
     SmomPublish::config::get_mcp_status()
+}
+
+/// 获取 STEP 本机配置（config.json 的 step 段，原 localStorage 记忆迁移至此）
+#[tauri::command]
+fn get_step_config(
+    app_handle: tauri::AppHandle,
+) -> Result<std::collections::BTreeMap<String, serde_json::Value>, String> {
+    Ok(SmomPublish::config::get_step_config(&app_handle))
+}
+
+/// 更新 STEP 本机配置（合并写入；值为 null 删除该键）
+#[tauri::command]
+fn update_step_config(
+    app_handle: tauri::AppHandle,
+    entries: std::collections::HashMap<String, serde_json::Value>,
+) -> Result<std::collections::BTreeMap<String, serde_json::Value>, String> {
+    SmomPublish::config::update_step_config(&app_handle, entries.into_iter().collect())
 }
 
 /// 前端回填 MCP 动作执行结果（配合 mcp/bridge.rs 的等待通道）
@@ -110,6 +140,10 @@ fn main() {
             println!("应用程序已启动，参数: {:?}, 工作目录: {:?}", args, cwd);
         }))
         .setup(|app| {
+            // 旧版应用身份数据导入：在数据库 / config.json 被打开之前，把上次【导入应用数据】
+            // 暂存的内容覆盖到当前数据目录（原数据先备份），因此必须放在最前面
+            appdata_import::apply_pending(app.handle());
+
             // 窗口标题动态带版本：标题文本取自 tauri.conf.json，版本取自 Cargo.toml（均派生自 package.json 单一事实源）
             // 注意：webview 内 document.title 不会同步到原生窗口标题，必须在 Rust 侧设置
             if let Some(window) = app.get_webview_window("main") {
@@ -160,6 +194,14 @@ fn main() {
             update_window_config,
             get_mcp_status,
             mcp_action_result,
+            restart_app,
+            get_step_config,
+            update_step_config,
+            appdata_import::detect_legacy_app_data,
+            appdata_import::import_legacy_app_data,
+            appdata_import::list_appdata_backups,
+            appdata_import::restore_appdata_backup,
+            appdata_import::delete_appdata_backup,
             file_module::exists,
             file_module::create_dir,
             file_module::open_dir,
@@ -198,10 +240,13 @@ fn main() {
             file_module::copy_non_sie_dlls,
             file_module::copy_dll_files_by_name,
             file_module::read_dlls_by_name,
+            file_module::collect_wpf_assemblies,
             file_module::read_latest_mtime,
             file_module::invalidate_ssh_session,
             cancel::set_publish_cancel,
             cancel::set_file_op_cancel,
+            upload_module::sync_dir_to_server,
+            upload_module::cancel_sync_upload,
             discovery_module::discover_local_services,
             discovery_module::discover_remote_windows_services,
             discovery_module::discover_remote_docker_containers,

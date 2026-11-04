@@ -495,7 +495,7 @@
         <restore-backup-dialog v-model="restoreVisible" :server-name="restoreServerName" :folders="restoreFolders"
             :services="restoreServices" :loading="backupRestoring" @restore="onRestoreBackup" @stop="onStopDialogOp" />
 
-        <appconfig-dialog ref="appconfigDialogRef" @environment-change="onAppConfigEnvChange"
+        <appconfig-dialog ref="appconfigDialogRef" :show-preflight="false" @environment-change="onAppConfigEnvChange"
             @project-change="onAppConfigProjectChange" @refresh="onAppconfigRefresh" />
 
         <!-- 功能说明对话框 -->
@@ -535,6 +535,7 @@ import {
     getDefaultSubObject,
 } from "@/utils/other";
 import { loadPublishSettings, getPublishModuleOrder, isStepPackWpfInGet, isStepOneClickVisible } from "@/utils/publishSettings";
+import { getStepConfigValue, setStepConfigValue, migrateStepLocalStorage } from "@/utils/stepLocalConfig";
 import mittBus from "@/utils/mitt";
 import { useStepLog } from "@/composables/useStepLog";
 import { useStepCompile } from "@/composables/useStepCompile";
@@ -570,22 +571,16 @@ const {
 const onLogScrollTop = () => scrollLogToTop();
 const onLogScrollBottom = () => scrollLogToBottom("smooth");
 
-// 日志行号显示开关：存 localStorage 本机记忆，默认开
+// 日志行号显示开关：存 config.json 的 step 段本机记忆，默认开
 const STEP_LOG_LINE_NO_VISIBLE_KEY = "stepLogShowLineNo";
-const loadShowLogLineNo = () => {
-    try {
-        return localStorage.getItem(STEP_LOG_LINE_NO_VISIBLE_KEY) !== "0";
-    } catch {
-        return true;
-    }
-};
-const showLogLineNo = ref(loadShowLogLineNo());
+const showLogLineNo = ref(true);
+getStepConfigValue<string>(STEP_LOG_LINE_NO_VISIBLE_KEY, "1").then((v) => {
+    showLogLineNo.value = v !== "0";
+});
 const onShowLogLineNoChange = (value: boolean | string | number) => {
-    try {
-        localStorage.setItem(STEP_LOG_LINE_NO_VISIBLE_KEY, value ? "1" : "0");
-    } catch {
-        // localStorage 不可用时仅本次会话生效
-    }
+    setStepConfigValue(STEP_LOG_LINE_NO_VISIBLE_KEY, value ? "1" : "0").catch((error) => {
+        console.error("保存日志行号显示开关失败:", error);
+    });
 };
 
 // 行号列宽：按当前最大行号（日志行 id 自增，最后一行即最大值）的位数自适应，所有行号按同一宽度右对齐
@@ -995,7 +990,8 @@ const checkClientPathRecentFiles = async (opTitle: string): Promise<boolean> => 
             if (opTitle === "打包WPF" && mod.key === "wpfClient") {
                 const generateDirs = JSON.parse(String((mod.mod as WpfClientConfigType).generateDirJson)) as string[];
                 for (const generateDir of generateDirs) {
-                    checkDirs.push({ label: mod.name, dir: `${outPath}/${mod.name}/${generateDir}` });
+                    // 标签带上生成目录名：同一模块有多个生成目录时，避免提示里出现多条相同的「WpfClient」
+                    checkDirs.push({ label: `${mod.name}/${generateDir}`, dir: `${outPath}/${mod.name}/${generateDir}` });
                 }
             }
 
@@ -1866,11 +1862,11 @@ const getProjectList = async () => {
     projectList.value = dataResult.data.data;
 };
 
-// 获取默认项目并恢复环境（优先恢复 localStorage 中保存的发布项目，项目已删除则回退默认项目）
+// 获取默认项目并恢复环境（优先恢复 config.json 中保存的发布项目，项目已删除则回退默认项目）
 const getProjectDefault = async (options?: { keepCurrentEnvironment?: boolean }) => {
     await getProjectList();
     // 1. 优先恢复上次选择的发布项目（需在项目列表中仍存在）
-    const savedProjectId = restoreProjectIdFromStorage();
+    const savedProjectId = await restoreProjectIdFromStorage();
     let projectObj = savedProjectId ? projectList.value?.find((item) => item.id === savedProjectId) : undefined;
     // 2. 未保存过或项目已删除 → 回退默认项目
     if (!projectObj) {
@@ -1902,7 +1898,7 @@ const getProjectDefault = async (options?: { keepCurrentEnvironment?: boolean })
         if (options?.keepCurrentEnvironment && availableEnvironments.includes(currentEnvironment)) {
             targetEnvironment = currentEnvironment;
         } else {
-            const savedEnvironment = restoreEnvironmentFromStorage(projectId);
+            const savedEnvironment = await restoreEnvironmentFromStorage(projectId);
             if (savedEnvironment && availableEnvironments.includes(savedEnvironment)) {
                 targetEnvironment = savedEnvironment;
             } else if (availableEnvironments.length > 0) {
@@ -1939,11 +1935,10 @@ const getPublishAppconfigs = async () => {
     }
 };
 
-// 从本地存储恢复环境选择
-const restoreEnvironmentFromStorage = (projectId: number): number | null => {
+// 从本机配置恢复环境选择（config.json 的 step 段，按项目维度）
+const restoreEnvironmentFromStorage = async (projectId: number): Promise<number | null> => {
     try {
-        const storageKey = `project_environment_${projectId}`;
-        const savedEnv = localStorage.getItem(storageKey);
+        const savedEnv = await getStepConfigValue<string>(`project_environment_${projectId}`, "");
         return savedEnv ? Number(savedEnv) : null;
     } catch (error) {
         console.error("恢复环境选择失败:", error);
@@ -1951,13 +1946,11 @@ const restoreEnvironmentFromStorage = (projectId: number): number | null => {
     }
 };
 
-// 保存环境选择到本地存储（按项目维度，刷新/重置后可恢复上次选择）
+// 保存环境选择到本机配置（按项目维度，刷新/重置后可恢复上次选择）
 const saveEnvironmentToStorage = (projectId: number, environment: number) => {
-    try {
-        localStorage.setItem(`project_environment_${projectId}`, String(environment));
-    } catch (error) {
+    setStepConfigValue(`project_environment_${projectId}`, String(environment)).catch((error) => {
         console.error("保存环境选择失败:", error);
-    }
+    });
 };
 
 // 环境切换：持久化 + 按「项目+环境」唯一重新取应用配置
@@ -1972,19 +1965,17 @@ const onEnvironmentChange = async (val: number) => {
     }
 };
 
-// 保存当前发布项目 id 到本地存储（打开页面时按 id 恢复上次选择）
+// 保存当前发布项目 id 到本机配置（打开页面时按 id 恢复上次选择）
 const saveProjectIdToStorage = (projectId: number) => {
-    try {
-        localStorage.setItem("publish_step_project_id", String(projectId));
-    } catch (error) {
+    setStepConfigValue("publish_step_project_id", String(projectId)).catch((error) => {
         console.error("保存发布项目id失败:", error);
-    }
+    });
 };
 
-// 从本地存储恢复发布项目 id
-const restoreProjectIdFromStorage = (): number | null => {
+// 从本机配置恢复发布项目 id
+const restoreProjectIdFromStorage = async (): Promise<number | null> => {
     try {
-        const savedId = localStorage.getItem("publish_step_project_id");
+        const savedId = await getStepConfigValue<string>("publish_step_project_id", "");
         return savedId ? Number(savedId) : null;
     } catch (error) {
         console.error("恢复发布项目id失败:", error);
@@ -1995,18 +1986,14 @@ const restoreProjectIdFromStorage = (): number | null => {
 // 最新时间阈值（分钟）：获取/上传程序集前检查本机程序集目录是否有该时间内的新产物，默认 10
 const RECENT_MINUTES_KEY = "publish_step_recent_minutes";
 const recentMinutes = ref(10);
-try {
-    const savedMinutes = Number(localStorage.getItem(RECENT_MINUTES_KEY));
+getStepConfigValue<string>(RECENT_MINUTES_KEY, "10").then((saved) => {
+    const savedMinutes = Number(saved);
     if (savedMinutes >= 1) recentMinutes.value = Math.floor(savedMinutes);
-} catch (error) {
-    console.error("恢复最新时间阈值失败:", error);
-}
+});
 const saveRecentMinutesToStorage = () => {
-    try {
-        localStorage.setItem(RECENT_MINUTES_KEY, String(recentMinutes.value));
-    } catch (error) {
+    setStepConfigValue(RECENT_MINUTES_KEY, String(recentMinutes.value)).catch((error) => {
         console.error("保存最新时间阈值失败:", error);
-    }
+    });
 };
 
 // 项目切换
@@ -2027,7 +2014,7 @@ const onProjectChange = async (val: number) => {
             }
         }
 
-        const savedEnvironment = restoreEnvironmentFromStorage(val);
+        const savedEnvironment = await restoreEnvironmentFromStorage(val);
         if (savedEnvironment && availableEnvironments.includes(savedEnvironment)) {
             state.publishData.environment = savedEnvironment;
         } else if (availableEnvironments.length > 0) {
@@ -2043,6 +2030,8 @@ const onProjectChange = async (val: number) => {
 
 // 页面加载完时
 onBeforeMount(async () => {
+    // 旧版 localStorage 里的 STEP 本机记忆先迁入 config.json（幂等，首次执行一次）
+    await migrateStepLocalStorage();
     await getProjectDefault();
     // 发布信息卡的应用类型排序依赖设置页「发布顺序」，进入页面先刷新一次缓存
     await refreshPublishModuleOrder();

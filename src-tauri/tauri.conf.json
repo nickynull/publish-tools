@@ -22,10 +22,10 @@
     },
     "createUpdaterArtifacts": true
   },
-  "productName": "SmomPublish",
-  "mainBinaryName": "SmomPublish",
+  "productName": "SmomPublishStep",
+  "mainBinaryName": "SmomPublishStep",
   "version": "../package.json",
-  "identifier": "com.smompublish.tool",
+  "identifier": "com.smompublish.tool.step",
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENGMEY1OEJDRTcxRURDMDMKUldRRDNCN252RmdQenpyVGE4SFE0OXpKdmphTStlWjB1WFUxUjVSUEV3UkxOZXZuQkpVc1IyVWQK",

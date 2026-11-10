@@ -1115,56 +1115,50 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 
 				// 将生成的文件复制到[打包目录]
 				const mergeStartTime = Date.now();
-				if (isNewVersion) {
-						const sourcePath = `${wpfClientPath}/${dirName}`;
-						const destinationPath = `${removeSlash(packDir)}/${dirName}`;
-						const copyResult = await cmdInvoke("copy_path", {
-							source: sourcePath,
-							destination: destinationPath,
-							...getRetryArgs("copy"),
-						});
-						if (copyResult.code !== 0) {
-							printInfoLog(`合并本地生成目录失败：复制 ${sourcePath} → ${destinationPath} 失败：${copyResult.data}.`, "log-error");
-							return false;
-						}
-					} else if (dirName == "Plugins") {
-						// Domain
-						const sourceDomainPath = `${wpfClientPath}/Domain`;
-						const destinationDomainPath = `${removeSlash(packDir)}/Domain`;
-						const copyDomainResult = await cmdInvoke("copy_path", {
-							source: sourceDomainPath,
-							destination: destinationDomainPath,
-							...getRetryArgs("copy"),
-						});
-						if (copyDomainResult.code !== 0) {
-							printInfoLog(`合并本地生成目录失败：复制 ${sourceDomainPath} → ${destinationDomainPath} 失败：${copyDomainResult.data}.`, "log-error");
-							return false;
-						}
-						// UI
-						const sourceUiPath = `${wpfClientPath}/UI`;
-						const destinationUiPath = `${removeSlash(packDir)}/UI`;
-						const copyUiResult = await cmdInvoke("copy_path", {
-							source: sourceUiPath,
-							destination: destinationUiPath,
-							...getRetryArgs("copy"),
-						});
-						if (copyUiResult.code !== 0) {
-							printInfoLog(`合并本地生成目录失败：复制 ${sourceUiPath} → ${destinationUiPath} 失败：${copyUiResult.data}.`, "log-error");
-							return false;
-						}
-					} else {
-						const sourcePath = `${wpfClientPath}/${dirName}`;
-						const destinationPath = `${removeSlash(packDir)}/${dirName}`;
-						const copyResult = await cmdInvoke("copy_path", {
-							source: sourcePath,
-							destination: destinationPath,
-							...getRetryArgs("copy"),
-						});
-						if (copyResult.code !== 0) {
-							printInfoLog(`合并本地生成目录失败：复制 ${sourcePath} → ${destinationPath} 失败：${copyResult.data}.`, "log-error");
-							return false;
-						}
+				// 合并来源优先取【获取程序集】产出目录（<程序集输出路径>/WpfClient/<目录>）：
+				// SIE 程序集统一收集后不再回写客户端生成路径/Plugins，若仍按客户端生成路径合并会拿到旧 DLL，
+				// 表现为 Manifest.xml 版本号 +1 但程序集内容没更新；产出目录缺失时才回退客户端生成路径
+				const resolveMergeSource = async (name: string) => {
+					const fromOutput = `${removeSlash(String(ctx.assemblyOutPath()))}/${MODULE_NAMES.wpfClient}/${name}`;
+					const outputExists = await cmdInvoke("exists", { path: fromOutput });
+					if (outputExists.code === 0) return { dir: fromOutput, fromOutput: true, exists: true };
+					const fromClient = `${wpfClientPath}/${name}`;
+					const clientExists = await cmdInvoke("exists", { path: fromClient });
+					return { dir: fromClient, fromOutput: false, exists: clientExists.code === 0 };
+				};
+				// copy_path 对不存在的源目录会静默返回成功，这里先判存在性，避免「合并了什么都没发生」却无日志
+				const mergeLocalDir = async (name: string) => {
+					const source = await resolveMergeSource(name);
+					const destination = `${removeSlash(packDir)}/${name}`;
+					if (!source.exists) {
+						printInfoLog(
+							`合并来源目录不存在，本次跳过合并 ${name}（${source.dir}）；如刚编译过，请重新执行【获取程序集】.`,
+							"log-warning"
+						);
+						return true;
 					}
+					printInfoLog(`合并 ${name}：${source.dir}（${source.fromOutput ? "获取程序集产出" : "客户端生成路径"}）→ ${destination}`);
+					const copyResult = await cmdInvoke("copy_path", {
+						source: source.dir,
+						destination,
+						...getRetryArgs("copy"),
+					});
+					if (copyResult.code !== 0) {
+						printInfoLog(`合并本地生成目录失败：复制 ${source.dir} → ${destination} 失败：${copyResult.data}.`, "log-error");
+						return false;
+					}
+					return true;
+				};
+				if (isNewVersion) {
+					if (!(await mergeLocalDir(dirName))) return false;
+				} else if (dirName == "Plugins") {
+					// Domain
+					if (!(await mergeLocalDir("Domain"))) return false;
+					// UI
+					if (!(await mergeLocalDir("UI"))) return false;
+				} else {
+					if (!(await mergeLocalDir(dirName))) return false;
+				}
 
 				// 重新打包压缩（压缩过程由后端进度事件刷新文件数进度）
 				const compressLogIndex = printInfoLog(`正在压缩 ${dirName}.zip ...`);

@@ -370,6 +370,10 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 		for (let i = 0; i < utf16leBytes.length; i++) binary += String.fromCharCode(utf16leBytes[i]);
 		return `powershell -NoProfile -EncodedCommand ${btoa(binary)}`;
 	};
+	// Windows 远程脚本统一入口：首句把控制台输出编码设为 UTF8（配合后端 smart_decode_bytes），
+	// 后续脚本可含中文路径/文件名，不会再被 sshd 的 GBK 代码页解坏
+	const buildWindowsScript = (...scriptLines: string[]) =>
+		buildPowerShellEncodedCommand(["[Console]::OutputEncoding = [System.Text.Encoding]::UTF8", ...scriptLines].join("\r\n"));
 
 	/**
 	 * 向服务器日志文件追加一行（写入形式：最后追加新行，内容：[日期时间] + 操作信息）。
@@ -820,7 +824,11 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 						username: uName,
 						password: uPwd,
 						server: serverAddress,
-						command: `powershell -Command "New-Item -ItemType Directory -Force -Path '${backupBase}' | Out-Null; Get-ChildItem -LiteralPath '${backupBase}' -Force | Remove-Item -Recurse -Force"`,
+						command: buildWindowsScript(
+							`$base = '${escapePowerShellLiteral(backupBase.replace(/\//g, "\\"))}'`,
+							"New-Item -ItemType Directory -Force -Path $base | Out-Null",
+							"Get-ChildItem -LiteralPath $base -Force | Remove-Item -Recurse -Force"
+						),
 					});
 				} else if (serverInfo.os === 2) {
 					mkdirResult = await execRemote({
@@ -857,7 +865,11 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 							username: uName,
 							password: uPwd,
 							server: serverAddress,
-							command: `powershell -Command "Copy-Item -Path '${removeSlash(ins.path)}' -Destination '${backupTarget}' -Recurse -Force"`,
+							command: buildWindowsScript(
+								`Copy-Item -Path '${escapePowerShellLiteral(removeSlash(ins.path).replace(/\//g, "\\"))}' -Destination '${escapePowerShellLiteral(
+									backupTarget.replace(/\//g, "\\")
+								)}' -Recurse -Force`
+							),
 						});
 					} else {
 						copyResult = await execRemote({
@@ -887,7 +899,9 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 					username: uName,
 					password: uPwd,
 					server: serverAddress,
-					command: `powershell -Command "(Get-Item -LiteralPath '${backupBase}').LastWriteTime = Get-Date"`,
+					command: buildWindowsScript(
+						`(Get-Item -LiteralPath '${escapePowerShellLiteral(backupBase.replace(/\//g, "\\"))}').LastWriteTime = Get-Date`
+					),
 				});
 			} else {
 				touchResult = await execRemote({
@@ -2003,7 +2017,8 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 	// 生成列出目录内各子目录最新/最旧文件的 PowerShell 脚本
 	// 输出格式：目录名|最新文件名|最新时间|最旧文件名|最旧时间
 	const buildAssemblyListScript = (baseDir: string) => {
-		return `Get-ChildItem -LiteralPath '${baseDir}' -Directory | ForEach-Object { $files = Get-ChildItem -LiteralPath $_.FullName -Recurse -File; if ($files) { $newest = $files | Sort-Object LastWriteTime -Descending | Select-Object -First 1; $oldest = $files | Sort-Object LastWriteTime | Select-Object -First 1; Write-Output ($_.Name + '|' + $newest.Name + '|' + $newest.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') + '|' + $oldest.Name + '|' + $oldest.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')) } else { Write-Output ($_.Name + '|||') } }`;
+		const winDir = escapePowerShellLiteral(baseDir.replace(/\//g, "\\"));
+		return `Get-ChildItem -LiteralPath '${winDir}' -Directory | ForEach-Object { $files = Get-ChildItem -LiteralPath $_.FullName -Recurse -File; if ($files) { $newest = $files | Sort-Object LastWriteTime -Descending | Select-Object -First 1; $oldest = $files | Sort-Object LastWriteTime | Select-Object -First 1; Write-Output ($_.Name + '|' + $newest.Name + '|' + $newest.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') + '|' + $oldest.Name + '|' + $oldest.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')) } else { Write-Output ($_.Name + '|||') } }`;
 	};
 
 	// 解析目录清单输出为表格行
@@ -2070,7 +2085,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 
 			let queryResult;
 			if (serverInfo.os === 1) {
-				const cmd = `powershell -Command "${buildAssemblyListScript(stagingBase)}"`;
+				const cmd = buildWindowsScript(buildAssemblyListScript(stagingBase));
 				queryResult = await execRemote({
 					username: serverInfo.account,
 					password: serverInfo.pwd,
@@ -2159,7 +2174,8 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 	// 输出格式：相对路径|Unix时间戳秒（UTC 基准，避免跨机时区差异）
 	const buildFileListScript = (dir: string, isWindows: boolean) => {
 		if (isWindows) {
-			return `Get-ChildItem -LiteralPath '${dir}' -Recurse -File | ForEach-Object { Write-Output ($_.FullName.Substring('${dir}'.Length).TrimStart('\\') + '|' + $_.LastWriteTimeUtc.Subtract([datetime]'1970-01-01').TotalSeconds) }`;
+			const winDir = escapePowerShellLiteral(dir.replace(/\//g, "\\"));
+			return `Get-ChildItem -LiteralPath '${winDir}' -Recurse -File | ForEach-Object { Write-Output ($_.FullName.Substring('${winDir}'.Length).TrimStart('\\') + '|' + $_.LastWriteTimeUtc.Subtract([datetime]'1970-01-01').TotalSeconds) }`;
 		}
 		return `find '${dir}' -type f -printf '%P|%T@\\n'`;
 	};
@@ -2270,7 +2286,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 					username: serverInfo.account,
 					password: serverInfo.pwd,
 					server: serverAddress,
-					command: `powershell -Command "${buildFileListScript(stagingBase, true)}"`,
+					command: buildWindowsScript(buildFileListScript(stagingBase, true)),
 				});
 			} else {
 				queryResult = await execRemote({
@@ -2457,7 +2473,11 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 
 			let queryResult;
 			if (serverInfo.os === 1) {
-				const cmd = `powershell -Command "Get-ChildItem -LiteralPath '${backupBase}' -Directory | Sort-Object Name -Descending | Select-Object -First 10 | ForEach-Object { $items = (Get-ChildItem -LiteralPath $_.FullName | ForEach-Object { $_.Name }) -join ','; Write-Output ($_.Name + '|' + $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') + '|' + $items) }"`;
+				const cmd = buildWindowsScript(
+					`Get-ChildItem -LiteralPath '${escapePowerShellLiteral(
+						backupBase.replace(/\//g, "\\")
+					)}' -Directory | Sort-Object Name -Descending | Select-Object -First 10 | ForEach-Object { $items = (Get-ChildItem -LiteralPath $_.FullName | ForEach-Object { $_.Name }) -join ','; Write-Output ($_.Name + '|' + $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') + '|' + $items) }`
+				);
 				queryResult = await execRemote({
 					username: serverInfo.account,
 					password: serverInfo.pwd,
@@ -2532,7 +2552,9 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 				username: serverInfo.account,
 				password: serverInfo.pwd,
 				server: serverAddress,
-				command: `powershell -Command "Remove-Item -LiteralPath '${row.backupPath}' -Recurse -Force"`,
+				command: buildWindowsScript(
+					`Remove-Item -LiteralPath '${escapePowerShellLiteral(String(row.backupPath).replace(/\//g, "\\"))}' -Recurse -Force`
+				),
 			});
 		} else {
 			deleteResult = await execRemote({
@@ -2630,13 +2652,19 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 		const copyStartTime = Date.now();
 		let copyResult;
 		if (serverInfo.os === 1) {
-			const copyPattern = isWpfClient ? `${params.backupPath}\\*` : `${params.backupPath}\\*.dll`;
+			const winBackupPath = escapePowerShellLiteral(String(params.backupPath).replace(/\//g, "\\"));
+			const winServicePath = escapePowerShellLiteral(servicePath.replace(/\//g, "\\"));
+			const copyPattern = isWpfClient ? `${winBackupPath}\\*` : `${winBackupPath}\\*.dll`;
 			const recurseArg = isWpfClient ? " -Recurse" : "";
 			copyResult = await execRemote({
 				username: serverInfo.account,
 				password: serverInfo.pwd,
 				server: serverAddress,
-				command: `powershell -Command "if (-not (Test-Path -LiteralPath '${params.backupPath}')) { Write-Output 'BACKUP_NOT_FOUND'; exit 1 }; if (-not (Test-Path -LiteralPath '${servicePath}')) { New-Item -ItemType Directory -Force -Path '${servicePath}' | Out-Null }; Copy-Item -Path '${copyPattern}' -Destination '${servicePath}'${recurseArg} -Force"`,
+				command: buildWindowsScript(
+					`if (-not (Test-Path -LiteralPath '${winBackupPath}')) { Write-Output 'BACKUP_NOT_FOUND'; exit 1 }`,
+					`if (-not (Test-Path -LiteralPath '${winServicePath}')) { New-Item -ItemType Directory -Force -Path '${winServicePath}' | Out-Null }`,
+					`Copy-Item -Path '${copyPattern}' -Destination '${winServicePath}'${recurseArg} -Force`
+				),
 			});
 		} else {
 			const findArgs = isWpfClient
@@ -2817,11 +2845,16 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 					printInfoLog(`${logPrefix} 正在替换程序集：${stagingBase}/${ins.module} → ${removeSlash(ins.path)}`);
 					let replaceResult;
 					if (serverInfo.os === 1) {
+						const winStagingModule = escapePowerShellLiteral(`${stagingBase}/${ins.module}`.replace(/\//g, "\\"));
+						const winServicePath = escapePowerShellLiteral(removeSlash(ins.path).replace(/\//g, "\\"));
 						replaceResult = await execRemote({
 							username: uName,
 							password: uPwd,
 							server: serverAddress,
-							command: `powershell -Command "if (-not (Test-Path -LiteralPath '${stagingBase}/${ins.module}')) { Write-Output 'STAGING_NOT_FOUND'; exit 1 }; Copy-Item -Path '${stagingBase}/${ins.module}\\*' -Destination '${removeSlash(ins.path)}' -Recurse -Force"`,
+							command: buildWindowsScript(
+								`if (-not (Test-Path -LiteralPath '${winStagingModule}')) { Write-Output 'STAGING_NOT_FOUND'; exit 1 }`,
+								`Copy-Item -Path '${winStagingModule}\\*' -Destination '${winServicePath}' -Recurse -Force`
+							),
 						});
 					} else if (serverInfo.os === 2) {
 						replaceResult = await execRemote({

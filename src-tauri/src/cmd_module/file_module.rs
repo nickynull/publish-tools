@@ -86,6 +86,72 @@ fn smart_decode_bytes(bytes: &[u8]) -> String {
     }
 }
 
+/// 还原 CLIXML 文本片段中的转义字符
+///
+/// PowerShell 序列化时把换行写成 `_x000D__x000A_`、制表符写成 `_x0009_`，
+/// 并把 `<>&"'` 转成 XML 实体；这里按顺序还原（`&amp;` 必须最后处理）。
+fn restore_clixml_text(raw: &str) -> String {
+    raw.replace("_x000D__x000A_", "\n")
+        .replace("_x000A_", "\n")
+        .replace("_x000D_", "")
+        .replace("_x0009_", "\t")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
+/// 去掉 XML 标签，仅保留文本内容（兜底用）
+fn strip_xml_tags(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut in_tag = false;
+    for ch in raw.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// 清洗 Windows PowerShell 非交互输出的 CLIXML 序列化内容
+///
+/// powershell.exe 在 stderr 被重定向（SSH 通道 / 管道）时，会把 ErrorRecord
+/// 和 progress 记录序列化为 CLIXML（`<Objs ...>` + `<S S="Error">...</S>`），
+/// 换行与尖括号被转义，直接展示形同乱码。此处只抽取错误文本并还原；
+/// 非 CLIXML 内容（Linux 输出、普通文本）原样返回。
+fn sanitize_clixml(text: &str) -> String {
+    const OPEN: &str = "<S S=\"Error\">";
+    const CLOSE: &str = "</S>";
+
+    if !text.contains("<Objs") {
+        return text.to_string();
+    }
+
+    let mut messages: Vec<String> = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find(OPEN) {
+        let after = &rest[start + OPEN.len()..];
+        let Some(end) = after.find(CLOSE) else { break };
+        let line = restore_clixml_text(&after[..end]);
+        if !line.trim().is_empty() {
+            messages.push(line);
+        }
+        rest = &after[end + CLOSE.len()..];
+    }
+
+    if messages.is_empty() {
+        // 只有 progress 等无错误文本的记录：至少别把 XML 标签抛给界面
+        let body = text.split("#< CLIXML").last().unwrap_or(text);
+        return restore_clixml_text(&strip_xml_tags(body)).trim().to_string();
+    }
+
+    messages.join("\n").trim().to_string()
+}
+
 /// 连接远程服务器
 ///
 /// # Arguments
@@ -218,8 +284,8 @@ async fn remote_command(
 
             (
                 status,
-                smart_decode_bytes(&stdout_bytes),
-                smart_decode_bytes(&stderr_bytes),
+                sanitize_clixml(&smart_decode_bytes(&stdout_bytes)),
+                sanitize_clixml(&smart_decode_bytes(&stderr_bytes)),
             )
         };
 

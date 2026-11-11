@@ -75,7 +75,7 @@
         2013或更高版本中安装了TFS并且处于登录状态。</span>
       <template #footer>
         <div class="dialog-footer">
-          <el-button @click="notShowTfsTip()">不在提示</el-button>
+          <el-button @click="notShowTfsTip()">不再提示</el-button>
           <el-button type="primary" @click="showTfsTip.show = false">知道了</el-button>
         </div>
       </template>
@@ -253,7 +253,7 @@ const onBatchDel = () => {
   });
 };
 
-// 不在提示
+// 不再提示
 const notShowTfsTip = () => {
   showTfsTip.value.show = false;
   Local.set(showTfsTip.value.key, true);

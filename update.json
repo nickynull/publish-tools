@@ -1,15 +1,15 @@
 {
-    "version": "2.0.4",
-    "notes": "<b>修复</b><br>• 修复远程命令报错显示为 CLIXML 乱码：解析 PowerShell 序列化输出，还原文错误文本的换行与符号，发布/备份失败日志恢复可读<br><b>注：版本 ≤ 0.0.55 <a style='color:green' target='_blank' href='https://github.com/nickynull/publish-tools/releases/download/v2.0.4/SmomPublishStep_2.0.4_x64-setup.exe'>点击此处</a> 下载。</b>",
-    "pub_date": "2026-11-11T06:05:32Z",
+    "version": "2.0.5",
+    "notes": "<b>修复</b><br>• 修复项目发布(STEP)页面切走再返回时日志滚动位置丢失：返回后回到离开前的位置，跟随底部状态则直接回到底部<br>• 修正 TFS 提示框按钮错别字（不在提示 → 不再提示）<br><b>注：版本 ≤ 0.0.55 <a style='color:green' target='_blank' href='https://github.com/nickynull/publish-tools/releases/download/v2.0.5/SmomPublishStep_2.0.5_x64-setup.exe'>点击此处</a> 下载。</b>",
+    "pub_date": "2026-11-11T07:15:58Z",
     "platforms": {
         "windows-x86_64": {
-            "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRRDNCN252RmdQejhJS0t4V0w0SzZrR3hYUldWU09TVHFoa2J2akNKT1hibytTTlBHK3RQRjZuS2Y3Y3lqZVNFQXplNllOQ0RuSXRaMnNpbDhpNFdBU2o4ZTVrdHlwdGdzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mzc3MTA5CWZpbGU6U21vbVB1Ymxpc2hTdGVwXzIuMC40X3g2NC1zZXR1cC5leGUKVFQvMEtqMENBSnlZNDdURHFMNDlxSllDdFFxYno5bXpHb2RiNW5RTmc2dHQvRDJteVBReXA5dUQ4SjJ4YzkvRzJ6RnRaamhSVVdxNXVZRG9QakMrQ0E9PQo=",
-            "url": "https://github.com/nickynull/publish-tools/releases/download/v2.0.4/SmomPublishStep_2.0.4_x64-setup.exe"
+            "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRRDNCN252RmdQejVGMytNK1JUeDFsMVJOSG5PUDJaakNGcU5sbWp1ZlRhbHZXenRhTHFvNGVuN3RPM0JSK002dGx0MTU3YXVKeE4vMmhlVFlmV1NlWmtRWVhWMDFPWFFZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MzgxMzE0CWZpbGU6U21vbVB1Ymxpc2hTdGVwXzIuMC41X3g2NC1zZXR1cC5leGUKZ25LS0k5cmNPLzdZRTYxRytqWU1mdC9CVm10dkJPempvMXpZRy9NUUVrTnlWQ01FL2djMStyYjVxbS9WUHF0MURnN0tMWlMvSjVyR25wekVaZFB5Q2c9PQo=",
+            "url": "https://github.com/nickynull/publish-tools/releases/download/v2.0.5/SmomPublishStep_2.0.5_x64-setup.exe"
         },
         "windows-msi": {
-            "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRRDNCN252RmdQejJYQ0xWc2JJSkNNUEJhdmJjUTJDREVYVGhObjdRWWM0YlJoRU0rRzMwcXhoSC9zMFBvRkk4cFh5d1hpWVk1Smd2dXFnclJxN0FiZS96aXVqQ01waFFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mzc3MTA5CWZpbGU6U21vbVB1Ymxpc2hTdGVwXzIuMC40X3g2NF96aC1DTi5tc2kKWFNjNzlQU2x0aU1OZVNVdE1jMzV1N285ellickErT2ZEdkQwVHlMMi9WZjQySW5uaHE4amdzSWk0ajZwOTBWL2NSUCtCbDZGTTNoVmtnVmMrL2NEQ0E9PQo=",
-            "url": "https://github.com/nickynull/publish-tools/releases/download/v2.0.4/SmomPublishStep_2.0.4_x64_zh-CN.msi"
+            "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRRDNCN252RmdQejBiVWpjZ2tmZnMrc2dtTzZmaFBabXNvS0Exb3FkZlhvOTVjdFlPWnNWZm1YdjJLeGNnWjRRLzY5TDMzYXBDRVJnRThNVFBRd083RVpmOHJOaVdoZndjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MzgxMzE0CWZpbGU6U21vbVB1Ymxpc2hTdGVwXzIuMC41X3g2NF96aC1DTi5tc2kKMUI5YVMrdENjNUZRaGhFTmV0OXEvTlQwaUlrQmk5d2t2MmdNNENYNlU1Lzh4Q2FjVGloMlRkNDNvZis3Uk9pS3g5czBDTlQvQzlwVVorZWxTSExyRFE9PQo=",
+            "url": "https://github.com/nickynull/publish-tools/releases/download/v2.0.5/SmomPublishStep_2.0.5_x64_zh-CN.msi"
         }
     }
 }

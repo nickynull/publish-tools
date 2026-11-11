@@ -65,6 +65,8 @@ export function useStepLog(options?: StepLogOptions) {
 	const BOTTOM_THRESHOLD = 8;
 	// 自动到底开关：点【回到顶部】或手动上翻离开底部后暂停，滚回底部（或点【回到底部】）恢复
 	let autoScrollEnabled = true;
+	// 最后一次滚动位置：keep-alive 页面失活时 DOM 脱离文档会被浏览器重置 scrollTop，返回时按此恢复
+	let lastScrollTop = 0;
 
 	// 是否已滚动到底部（内容不足一屏时始终算贴底）
 	const isNearBottom = () => {
@@ -75,6 +77,7 @@ export function useStepLog(options?: StepLogOptions) {
 
 	// 滚动监听：不区分程序性滚动还是用户手动滚动，统一按「最终是否贴底」校正开关
 	const onLogScroll = () => {
+		if (logContentEl) lastScrollTop = logContentEl.scrollTop;
 		autoScrollEnabled = isNearBottom();
 	};
 
@@ -120,6 +123,19 @@ export function useStepLog(options?: StepLogOptions) {
 		autoScrollEnabled = !scrollable;
 		nextTick(() => {
 			if (logContentEl) logContentEl.scrollTo({ top: 0, behavior });
+		});
+	};
+
+	// 页面重新激活（keep-alive 返回）时恢复滚动视图：跟随状态直接回到底部，否则回到离开前的位置
+	// （失活期间 DOM 脱离文档，scrollTop 已被浏览器重置为 0；失活期间新日志继续输出，历史位置为近似恢复）
+	const restoreLogScroll = () => {
+		nextTick(() => {
+			if (!logContentEl) return;
+			if (autoScrollEnabled) {
+				logContentEl.scrollTo({ top: logContentEl.scrollHeight });
+			} else {
+				logContentEl.scrollTop = lastScrollTop;
+			}
 		});
 	};
 
@@ -235,6 +251,7 @@ export function useStepLog(options?: StepLogOptions) {
 		setLogContentRef,
 		scrollLogToTop,
 		scrollLogToBottom,
+		restoreLogScroll,
 		printInfoLog,
 		printLogDivider,
 		updateLogProgress,

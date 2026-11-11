@@ -509,6 +509,7 @@ import {
     ref,
     computed,
     watch,
+    onActivated,
     onBeforeMount,
     onBeforeUnmount,
     defineAsyncComponent,
@@ -561,6 +562,7 @@ const {
     setLogContentRef,
     scrollLogToTop,
     scrollLogToBottom,
+    restoreLogScroll,
     printInfoLog,
     printLogDivider,
     onRemoveLogs,
@@ -570,6 +572,9 @@ const {
 // 日志滚动按钮：回到顶部 / 回到底部（日志过长时快速定位）
 const onLogScrollTop = () => scrollLogToTop();
 const onLogScrollBottom = () => scrollLogToBottom("smooth");
+
+// keep-alive 返回本页时恢复日志滚动视图：失活时 DOM 脱离文档，浏览器会把滚动条重置到顶部
+onActivated(() => restoreLogScroll());
 
 // 日志行号显示开关：存 config.json 的 step 段本机记忆，默认开
 const STEP_LOG_LINE_NO_VISIBLE_KEY = "stepLogShowLineNo";

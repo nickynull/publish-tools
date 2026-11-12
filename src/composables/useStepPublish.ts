@@ -2731,10 +2731,11 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 
 	/**
 	 * 发布：停止服务 → 将服务器上程序集暂存路径的程序集替换到服务路径 → 开启服务
+	 * @param pickInstances 勾选发布模式下传入本次选中的服务实例；不传则发布全部实例
 	 */
-	const stepPublish = async () => {
+	const stepPublish = async (pickInstances?: ServiceInstanceType[]) => {
 		resetStopState();
-		const instances = getServiceInstances();
+		const instances = pickInstances ?? getServiceInstances();
 		if (instances.length < 1) {
 			printInfoLog("应用配置中未找到任何服务，请检查.", "log-error");
 			return false;
@@ -4330,6 +4331,7 @@ export function useStepPublish(ctx: StepPublishContext, log: StepLogApi) {
 		checkAssemblies,
 		getServiceBackups,
 		deleteServiceBackup,
+		getServiceInstances,
 		getServiceInstancesByServer,
 		restoreServiceBackup,
 		stepPublish,

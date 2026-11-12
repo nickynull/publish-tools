@@ -495,6 +495,9 @@
         <restore-backup-dialog v-model="restoreVisible" :server-name="restoreServerName" :folders="restoreFolders"
             :services="restoreServices" :loading="backupRestoring" @restore="onRestoreBackup" @stop="onStopDialogOp" />
 
+        <!-- 发布前勾选服务（勾选发布模式） -->
+        <publish-select-dialog ref="publishPickRef" />
+
         <appconfig-dialog ref="appconfigDialogRef" :show-preflight="false" @environment-change="onAppConfigEnvChange"
             @project-change="onAppConfigProjectChange" @refresh="onAppconfigRefresh" />
 
@@ -542,6 +545,7 @@ import { useStepLog } from "@/composables/useStepLog";
 import { useStepCompile } from "@/composables/useStepCompile";
 import {
     useStepPublish,
+    type ServiceInstanceType,
     type ServiceStatusRow,
     type StagingAssemblyRow,
     type AssemblyDiffRow,
@@ -605,6 +609,11 @@ const HelpDialog = defineAsyncComponent(
 );
 const RestoreBackupDialog = defineAsyncComponent(
     () => import("./components/restoreBackupDialog.vue")
+);
+// 发布前勾选服务（勾选发布模式下使用）
+const publishPickRef = ref();
+const PublishSelectDialog = defineAsyncComponent(
+    () => import("./components/publishSelectDialog.vue")
 );
 
 // 查看功能说明
@@ -1077,23 +1086,7 @@ const onFunModuleHandle = async (index: number) => {
         return;
     }
 
-    // 发布前二次确认
-    if (title === "发布") {
-        try {
-            await ElMessageBox.confirm(
-                "发布将按服务实例执行：停止服务 → 用程序集暂存路径的内容替换服务发布路径 → 开启服务。<br/><br/>建议发布前先执行【备份】！是否继续？",
-                "发布确认",
-                {
-                    confirmButtonText: "开始发布",
-                    cancelButtonText: "取消",
-                    dangerouslyUseHTMLString: true,
-                    type: "warning",
-                }
-            );
-        } catch {
-            return;
-        }
-    }
+    // 发布 / 一键发布的确认与「建议先备份」提醒都在勾选服务弹窗内（见 executeFunModule / executeOneClickPublish）
 
     // 编译解决方案：执行前确认目标与参数（MSBuild 耗时较长，避免误点）
     if (title === "编译解决方案") {
@@ -1120,23 +1113,7 @@ const onFunModuleHandle = async (index: number) => {
         }
     }
 
-    // 一键发布：一次性确认整个链路（不再逐步确认）
-    if (title === "一键发布") {
-        try {
-            await ElMessageBox.confirm(
-                "一键发布将依次执行：获取程序集 → 打包WPF → 上传程序集 → 发布，任一步失败即中止。<br/><br/>建议发布前先执行【备份】！是否继续？",
-                "一键发布确认",
-                {
-                    confirmButtonText: "开始一键发布",
-                    cancelButtonText: "取消",
-                    dangerouslyUseHTMLString: true,
-                    type: "warning",
-                }
-            );
-        } catch {
-            return;
-        }
-    }
+    // 一键发布的链路说明与「建议先备份」提醒同样在勾选服务弹窗内
 
     // 获取程序集/上传程序集前：检查本机程序集路径（获取/上传的目标目录）下是否有 10 分钟内修改的文件，
     // 没有则可能尚未完成构建，让用户决定是否继续
@@ -1193,6 +1170,30 @@ const pullLatestCodeForStep = async (): Promise<boolean> => {
     return pullResult.code === 0 && !pullResult.data?.skipped;
 };
 
+// 发布前勾选要发布的服务（默认全选，弹窗内提示建议先备份）
+// 返回 null = 用户取消；数组 = 本次要发布的服务实例
+const pickPublishInstances = async (
+    mode: "publish" | "oneClick" = "publish"
+): Promise<ServiceInstanceType[] | null> => {
+    const instances = stepPublishApi.getServiceInstances();
+    if (instances.length < 1) {
+        printInfoLog("应用配置中未找到任何服务，请检查.", "log-error");
+        return null;
+    }
+    const pickDialog = publishPickRef.value;
+    if (!pickDialog) {
+        ElMessage.warning("服务勾选窗口尚未加载完成，请稍后重试");
+        return null;
+    }
+    const picked = (await pickDialog.open(instances, mode)) as ServiceInstanceType[] | null;
+    if (!picked) {
+        printInfoLog("已取消发布：未选择要发布的服务.", "log-warning");
+        return null;
+    }
+    printInfoLog(`本次发布 ${picked.length}/${instances.length} 个服务`);
+    return picked;
+};
+
 // 一键发布链路：获取程序集 → 打包WPF（按需） → 上传程序集 → 发布，任一步失败即中止
 // WPF 打包全程只执行一次：「一步获取程序集」开启时随获取程序集执行；未开启时在此作为独立步骤执行
 // 未发布 WpfClient（应用配置未配置或已移除）时不打包
@@ -1203,6 +1204,10 @@ const executeOneClickPublish = async (): Promise<boolean> => {
     };
     // 此时 loadPublishSettings 已在 onFunModuleHandle 中刷新缓存，直接读缓存判断
     const wpfMerged = isStepPackWpfInGet();
+
+    // 勾选发布：链路开始前先选定要发布的服务，发布步骤沿用该选择
+    const pickedInstances = await pickPublishInstances("oneClick");
+    if (pickedInstances === null) return false;
 
     // 步骤1：获取程序集（合并开关开启时，打包WPF在其成功后自动执行）
     setStepLoadingText("获取中");
@@ -1229,7 +1234,7 @@ const executeOneClickPublish = async (): Promise<boolean> => {
     // 步骤4：发布
     printLogDivider(`开始执行【发布】`);
     setStepLoadingText("发布中");
-    if (!(await stepPublishApi.stepPublish())) return false;
+    if (!(await stepPublishApi.stepPublish(pickedInstances))) return false;
     printInfoLog("发布成功。");
     printLogDivider(`【发布】执行结束`);
     return true;
@@ -1262,8 +1267,12 @@ const executeFunModule = async (title: string): Promise<boolean> => {
             return await stepPublishApi.packWpfClient();
         case "上传程序集":
             return await stepPublishApi.uploadAssemblies();
-        case "发布":
-            return await stepPublishApi.stepPublish();
+        case "发布": {
+            // 勾选发布模式下先选定要发布的服务（备份提醒也在该弹窗内）
+            const pickedInstances = await pickPublishInstances("publish");
+            if (pickedInstances === null) return false;
+            return await stepPublishApi.stepPublish(pickedInstances);
+        }
         default:
             return false;
     }

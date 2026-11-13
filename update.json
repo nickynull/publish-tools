@@ -1,15 +1,15 @@
 {
-    "version": "2.2.0",
-    "notes": "<b>功能</b><br>• 合并上游版本 v1.1.0：<br>• MCP 发布动作（一键发布 / 手动发布 / 还原备份 / 获取最新代码 / 编译项目 / 获取程序集）改为提交队列后立即返回任务号，多个会话按提交顺序串行执行，不再并发踩踏同一套 TFS 工作区、编译输出与部署目录<br>• 新增 MCP 工具 `publish_status`（按任务号或「项目 + 环境」查状态、时间线、排队数、失败原因）、`publish_queue`（列出排队中与执行中任务）、`publish_cancel`（撤销排队任务 / 中止执行中任务）<br>• 发布动作执行期间每 30 秒心跳上报，超过 12 分钟无心跳判定界面卡死或崩溃，自动放行队列；MCP 任务执行期间不再理会界面「暂停」，避免无人操作时整条队列被挂住<br>• 发布锁改为整机全局单锁（不再按「项目 + 环境」切分，跨项目并发同样互相覆盖），有效期 30 → 15 分钟，发布期间每 3 分钟续约；定时发布遇锁被占用改为排队等待（每 60 秒重试，最多等 30 分钟）<br>• 目录上传提速：上传前一次性递归扫描远端目录树再内存比对，不再逐文件查询；SFTP 写入改 1MB 分块；发布日志新增比对耗时与传输耗时<br>• 关于页新增项目作者、本源仓库与 Fork 来源仓库地址（可点击打开）与已合并的 Fork 来源版本<br><b>修复</b><br>• 修复访问过备份页后一键发布被误报失败：备份页对 MCP 动作的监听常驻，会抢先回复「备份页不支持的操作」而发布实际仍在后台执行；现在备份页只处理还原备份、发布页只处理发布类动作，暂存的待办动作也按类型取用<br><b>注：版本 ≤ 0.0.55 <a style='color:green' target='_blank' href='https://github.com/nickynull/publish-tools/releases/download/v2.2.0/SmomPublishStep_2.2.0_x64-setup.exe'>点击此处</a> 下载。</b>",
-    "pub_date": "2026-11-13T04:32:34Z",
+    "version": "2.2.1",
+    "notes": "<b>修复</b><br>• 修复文件管理「返回上级」在盘符根子目录（如 `D:/smom`）与 Unix 根子目录（如 `/data`）下被禁用的问题，现可正常返回 `D:/` 或 `/`<br><b>注：版本 ≤ 0.0.55 <a style='color:green' target='_blank' href='https://github.com/nickynull/publish-tools/releases/download/v2.2.1/SmomPublishStep_2.2.1_x64-setup.exe'>点击此处</a> 下载。</b>",
+    "pub_date": "2026-11-13T06:36:57Z",
     "platforms": {
         "windows-x86_64": {
-            "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRRDNCN252RmdQejlNcmhMSkpSdysxUjN4eURCaWJCVTA0VzlndXNSSFVWNUhIbDgrRHlqY0YyUTZKY3VsZ1p3WW9YL2tuZXJrMDRrL294OGtoblFjQWl5OE55eHNxM1FNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTQ0MzM1CWZpbGU6U21vbVB1Ymxpc2hTdGVwXzIuMi4wX3g2NC1zZXR1cC5leGUKSVN1YzludC91YXVlTVlNVm9lM0hvbTcvbUtITm5RRHVORHFDaUxmRzE5NFByTDhMVlB2MS80cmpGbStEdk5MbDcvUGRXWWI3OUt0ZFpkcHVhb0hUQ0E9PQo=",
-            "url": "https://github.com/nickynull/publish-tools/releases/download/v2.2.0/SmomPublishStep_2.2.0_x64-setup.exe"
+            "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRRDNCN252RmdQenpsNlBiRUR5OU9BelJpVlluYituQnd2Z3FMSlpiSCtGL1U3c29YY08rWk9aeE80eTZiR3hMOHhmeGZQKzJvY3VKaFQ3K0RLdHUzSmtMWDJUR3FNQ3dVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTUxNzkzCWZpbGU6U21vbVB1Ymxpc2hTdGVwXzIuMi4xX3g2NC1zZXR1cC5leGUKeHM0ZjdkVVVnYUYzZDFsZ25USk1pb1Y3K2JXS1FybjBLbnlJZ1VEQTFwNUJxakNEU2Z1dFpjNmhvWHY1MURyWXhaelRIamxSRUNuNHhsenI0T1JQQ2c9PQo=",
+            "url": "https://github.com/nickynull/publish-tools/releases/download/v2.2.1/SmomPublishStep_2.2.1_x64-setup.exe"
         },
         "windows-msi": {
-            "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRRDNCN252RmdQejA4ampKVGNKN2ZRN0JIcDNLZUFPT1FpTkxyOWM0Ti9vRnRDMGhmR2tpcXYzSnZ1M2lzMzBKS0FGRm0zS0RsckozTTZWOXFLaVNOUHlEb1pxazNvMFFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTQ0MzM1CWZpbGU6U21vbVB1Ymxpc2hTdGVwXzIuMi4wX3g2NF96aC1DTi5tc2kKNTY5eTNJYzNwK045UFlQYmFnMjI2Qm41MWdnQXIzVTBzUlZwNnZOSDM1Q2RhekVVNFNjQzZXd01CQVVaZ1l2Szh2bzByVEdCTWZLejFnaWRSeDZIQUE9PQo=",
-            "url": "https://github.com/nickynull/publish-tools/releases/download/v2.2.0/SmomPublishStep_2.2.0_x64_zh-CN.msi"
+            "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRRDNCN252RmdQejRPek9lVkhEN0FQWGVhb25jNUhhL2Rmb3IvN0FUVEVOYlB3Z0lNbHZsOUR6WndESVdycHdSbmx1K1JXSUFOOUtjWE9RaVlqUWVWMlVMbG82OU4xYnc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTUxNzkzCWZpbGU6U21vbVB1Ymxpc2hTdGVwXzIuMi4xX3g2NF96aC1DTi5tc2kKamxaQWQwenNnL0ZKTmhHckk4L2pxZTl3aDFXRDMxZTViRmNsUGZ1THgxckhobTJ2alg1QnJRbW10SXlzSVFHSXVGYkU3NldsMEtDSm03QkpYa0xZQVE9PQo=",
+            "url": "https://github.com/nickynull/publish-tools/releases/download/v2.2.1/SmomPublishStep_2.2.1_x64_zh-CN.msi"
         }
     }
 }

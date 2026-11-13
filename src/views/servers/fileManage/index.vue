@@ -348,7 +348,7 @@ const dirTableRef = ref();
 const loadedPath = ref("");
 /** 本次浏览的起始路径（「查看文件」进入的根目录；进入子目录/返回上级不改变它） */
 const browseRoot = ref("");
-/** 当前目录的上级路径（到根返回 ""，用于禁用「返回上级」） */
+/** 当前目录的上级路径（已是根返回 ""，用于禁用「返回上级」；盘符子目录可回到盘符根） */
 const parentBrowsePath = computed(() => parentRemotePath(loadedPath.value));
 /** 读取序号：每次发起读取自增，晚返回的旧请求据此丢弃结果，防止覆盖/清空新列表 */
 const loadSeq = ref(0);

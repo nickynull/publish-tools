@@ -49,7 +49,9 @@ export const buildPowerShellEncodedCommand = (script: string) =>
  * @param segments 追加的分段（自动去掉首尾分隔符）
  */
 export function joinRemotePath(base: string, ...segments: string[]): string {
-	const root = removeSlash(String(base ?? "").trim());
+	const raw = String(base ?? "").trim();
+	// Unix 根 "/" 会被 removeSlash 清空，须保留为根（"/" + "smom" → "/smom"）
+	const root = raw === "/" ? "/" : removeSlash(raw);
 	const tail = segments
 		.map((segment) => String(segment ?? "").trim().replace(/^\/+|\/+$/g, ""))
 		.filter(Boolean)
@@ -61,15 +63,21 @@ export function joinRemotePath(base: string, ...segments: string[]): string {
 /**
  * 计算远端路径的上级目录（统一正斜杠）
  *
- * 已到根（Windows 盘符根 `C:` / Linux `/`）或空路径返回 ""，
- * 调用方据此禁用「返回上级」，避免越界读盘符外路径。
+ * 盘符根（`D:/smom` → `D:/`）与 Unix 根（`/data` → `/`）是合法上级，正常返回；
+ * 已到根（`D:/`、`/`）或空路径返回 ""，调用方据此禁用「返回上级」。
  * @param path 当前目录路径（可带尾部分隔符）
  */
 export function parentRemotePath(path: string): string {
 	const trimmed = String(path ?? "").trim().replace(/[\\/]+$/, "");
 	if (!trimmed) return "";
+	// 已是盘符根（"D:/" 去尾斜杠后即 "D:"）
+	if (/^[A-Za-z]:$/.test(trimmed)) return "";
 	const parent = trimmed.replace(/[/\\][^/\\]*$/, "");
-	return /^[A-Za-z]:$/.test(parent) ? "" : parent;
+	// "D:/smom" → 盘符根 "D:/"（带斜杠，SFTP 才按绝对路径读取）
+	if (/^[A-Za-z]:$/.test(parent)) return `${parent}/`;
+	// "/data" → Unix 根 "/"
+	if (!parent && trimmed.startsWith("/")) return "/";
+	return parent;
 }
 
 /**

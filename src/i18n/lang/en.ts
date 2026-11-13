@@ -196,6 +196,11 @@ export default {
 		checkUpdate: 'Check for Updates',
 		alreadyLatest: 'You are already on the latest version',
 		checkUpdateFailed: 'Failed to check for updates',
+		repoUrl: 'Project repo',
+		author: 'Author',
+		forkUrl: 'Forked from',
+		forkVersion: 'Merged upstream version',
+		openLinkFailed: 'Failed to open link',
 	},
 	icons: {
 		title: 'Icons',

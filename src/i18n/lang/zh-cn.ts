@@ -195,6 +195,11 @@ export default {
 		checkUpdate: '检查更新',
 		alreadyLatest: '当前已是最新版本',
 		checkUpdateFailed: '检查更新失败',
+		repoUrl: '本项目仓库',
+		author: '作者',
+		forkUrl: 'Fork 来源',
+		forkVersion: '已合并上游版本',
+		openLinkFailed: '打开链接失败',
 	},
 	icons: {
 		title: '图标',

@@ -59,6 +59,20 @@ export function joinRemotePath(base: string, ...segments: string[]): string {
 }
 
 /**
+ * 计算远端路径的上级目录（统一正斜杠）
+ *
+ * 已到根（Windows 盘符根 `C:` / Linux `/`）或空路径返回 ""，
+ * 调用方据此禁用「返回上级」，避免越界读盘符外路径。
+ * @param path 当前目录路径（可带尾部分隔符）
+ */
+export function parentRemotePath(path: string): string {
+	const trimmed = String(path ?? "").trim().replace(/[\\/]+$/, "");
+	if (!trimmed) return "";
+	const parent = trimmed.replace(/[/\\][^/\\]*$/, "");
+	return /^[A-Za-z]:$/.test(parent) ? "" : parent;
+}
+
+/**
  * 探测远端目录是否存在的命令（输出 1/0，必定 exit 0）
  * @param os 服务环境（1=Windows，2=Docker）
  * @param remotePath 远端目录路径

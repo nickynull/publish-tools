@@ -60,7 +60,7 @@
                                         <template v-else-if="selectedPaths.length > 1">已勾选 {{ selectedPaths.length }} 个管理路径，仅勾选 1 个时可查看文件</template>
                                         <template v-else>请勾选 1 个管理路径后点击「查看文件」</template>
                                     </span>
-                                    <span v-if="loadedPath && selectedPaths.length === 1 && selectedPaths[0] !== loadedPath"
+                                    <span v-if="loadedPath && selectedPaths.length === 1 && selectedPaths[0] !== browseRoot"
                                         class="hint browse-diverged">
                                         勾选已变更，点「刷新」切换
                                     </span>
@@ -71,6 +71,10 @@
                                         </template>
                                     </el-input>
                                     <div class="browse-actions">
+                                        <el-button size="small" title="返回上级目录"
+                                            :disabled="busy || loadingDir || !parentBrowsePath" @click="onGoUpDir">
+                                            返回上级
+                                        </el-button>
                                         <el-button size="small"
                                             :disabled="busy || loadingDir || (selectedPaths.length !== 1 && !loadedPath)"
                                             @click="onRefreshDir">刷新</el-button>
@@ -95,14 +99,17 @@
                                     class="fill-table" row-key="path" v-loading="loadingDir"
                                     element-loading-text="正在读取远程目录…"
                                     :empty-text="searchTokens.length > 0 ? '没有匹配的条目' : '该路径下没有文件或文件夹'"
-                                    @selection-change="onDirSelectionChange">
+                                    @selection-change="onDirSelectionChange" @row-dblclick="onRowDblClick">
                                     <!-- 文件夹不可勾选（下载/删除只支持文件，删除文件夹易误删整棵子树） -->
                                     <el-table-column type="selection" width="46" reserve-selection
                                         :selectable="(row: RemoteDirEntry) => !row.isDir" />
                                     <el-table-column label="名称" min-width="240" show-overflow-tooltip sortable
                                         :sort-method="sortByName">
                                         <template #default="{ row }">
-                                            <span class="entry-name">{{ row.isDir ? "📁" : "📄" }} {{ row.name }}</span>
+                                            <span class="entry-name" :class="{ dir: row.isDir }"
+                                                :title="row.isDir ? '双击进入子目录' : ''">
+                                                {{ row.isDir ? "📁" : "📄" }} {{ row.name }}
+                                            </span>
                                         </template>
                                     </el-table-column>
                                     <el-table-column label="类型" width="90" sortable :sort-method="sortByType">
@@ -235,6 +242,7 @@ import {
     buildRemoteDeleteCommand,
     formatFileSize,
     joinRemotePath,
+    parentRemotePath,
     REMOTE_OP_OK,
 } from "@/utils/remoteFs";
 import { formatDate } from "@/utils/formatTime";
@@ -338,6 +346,10 @@ const dirSelected = ref<RemoteDirEntry[]>([]);
 const dirTableRef = ref();
 /** 当前列表实际读取的路径（不随勾选变化，避免「显示的路径」与「列表内容」错位） */
 const loadedPath = ref("");
+/** 本次浏览的起始路径（「查看文件」进入的根目录；进入子目录/返回上级不改变它） */
+const browseRoot = ref("");
+/** 当前目录的上级路径（到根返回 ""，用于禁用「返回上级」） */
+const parentBrowsePath = computed(() => parentRemotePath(loadedPath.value));
 /** 读取序号：每次发起读取自增，晚返回的旧请求据此丢弃结果，防止覆盖/清空新列表 */
 const loadSeq = ref(0);
 /** 浏览页搜索关键词：只过滤已读取到的结果，按键不请求服务器 */
@@ -490,6 +502,7 @@ const initSession = () => {
     tasks.value = [];
     dirEntries.value = [];
     loadedPath.value = "";
+    browseRoot.value = "";
     searchKeyword.value = "";
 };
 
@@ -776,15 +789,47 @@ const onViewFiles = async () => {
         ElMessage.warning("请只勾选一个管理路径后再查看文件");
         return;
     }
+    // 记录浏览根目录：进入子目录/返回上级不改变它，勾选变更提示按它比较
+    browseRoot.value = selectedPaths.value[0];
     // 先切到浏览页签再读目录，表格上的 loading 层才能覆盖整个读取过程
     activeTab.value = "browse";
     await loadDir(selectedPaths.value[0]);
 };
 
-/** 刷新：勾选唯一时切到该路径重读，否则按当前列表所属路径重读 */
+/**
+ * 刷新：勾选路径与浏览根不一致（勾选已变更）时切回勾选路径，否则重读当前目录
+ * （浏览到子目录时刷新保持当前目录，不跳回根目录）
+ */
 const onRefreshDir = () => {
     activeTab.value = "browse";
+    const selected = selectedPaths.value.length === 1 ? selectedPaths.value[0] : "";
+    if (selected && selected !== browseRoot.value) {
+        browseRoot.value = selected;
+        return loadDir(selected);
+    }
     return loadDir();
+};
+
+/** 双击行进入子目录（文件行忽略；读取中/其他操作进行中由 onEnterDir 兜底） */
+const onRowDblClick = (row: RemoteDirEntry) => {
+    if (!row?.isDir) return;
+    onEnterDir(row.name);
+};
+
+/** 进入当前目录下的子目录 */
+const onEnterDir = (name: string) => {
+    if (busy.value || loadingDir.value || !loadedPath.value) return;
+    // 旧关键词只匹配上一级目录的读取结果，换目录后清空
+    searchKeyword.value = "";
+    return loadDir(joinRemotePath(loadedPath.value, name));
+};
+
+/** 返回上级目录（到根时按钮已禁用，此处兜底） */
+const onGoUpDir = () => {
+    const parent = parentBrowsePath.value;
+    if (busy.value || loadingDir.value || !parent) return;
+    searchKeyword.value = "";
+    return loadDir(parent);
 };
 
 const onDirSelectionChange = (rows: RemoteDirEntry[]) => {
@@ -800,10 +845,10 @@ const clearDirSelection = () => {
 const loadDir = async (targetPath?: string) => {
     // 串行化：上一次读取未结束时不发起新读取（按钮禁用之外的兜底）
     if (loadingDir.value) return;
-    // 目标路径：显式传入 > 当前唯一勾选 > 列表所属路径（勾选变成 0/多个时仍可刷新当前列表）
+    // 目标路径：显式传入 > 当前列表路径（浏览子目录时刷新保持当前目录）> 唯一勾选（无浏览记录时的兜底）
     const remotePath =
         targetPath ??
-        (selectedPaths.value.length === 1 ? selectedPaths.value[0] : loadedPath.value);
+        (loadedPath.value || (selectedPaths.value.length === 1 ? selectedPaths.value[0] : ""));
     if (!remotePath) {
         ElMessage.warning("请只勾选一个管理路径后再查看文件");
         return;
@@ -1378,6 +1423,15 @@ $log-console-text: #ffffff;
 
 .entry-name {
     word-break: break-all;
+
+    /* 文件夹名称可双击进入子目录，指针 + 悬停下划线提示 */
+    &.dir {
+        cursor: pointer;
+
+        &:hover {
+            text-decoration: underline;
+        }
+    }
 }
 
 /* 文件夹行「下载」位显示占位符，占住与文件行相近的宽度 */

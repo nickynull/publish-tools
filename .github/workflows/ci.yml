@@ -261,6 +261,8 @@ jobs:
         run: |
           # 先备份本步生成的 update.json（Python 步骤已写入新签名/版本）
           cp update.json /tmp/update.json.new
+          # 复原工作区 update.json（Python 步骤改写过），否则与 master 内容不一致时 checkout 会被本地修改挡下
+          git restore update.json
           gh auth setup-git
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

@@ -61,7 +61,7 @@ const PROJECT_REPO_URL = "https://github.com/nickynull/publish-tools";
 const UPSTREAM_REPO_URL =
   "https://github.com/SIE-Operations-and-Maintenance-Team/publish-tools";
 // 当前已合并的 fork 来源版本：合并 upstream 新 tag 后同步此值
-const MERGED_UPSTREAM_VERSION = "1.0.0";
+const MERGED_UPSTREAM_VERSION = "1.1.0";
 
 // 升级弹窗组件（复用 App.vue 启动时检查更新同款组件）
 const Upgrade = defineAsyncComponent(() => import("@/layout/upgrade/index.vue"));
